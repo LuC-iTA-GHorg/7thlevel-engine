@@ -202,8 +202,7 @@ in `port\src\rt.c`):
 Every opcode of the original is handled by `rt_op` (or compiled inline by `scr2c`): no opcode is
 left unported.
 
-Partial: 06 (the background transitions of types 2-5, field +10/+12/+14, are not ported: the
-field is 0 in every present game), 09/0E/5D (CD audio behaves as with no CD drive), 38 (`%l`
+Partial: 09/0E/5D (CD audio behaves as with no CD drive), 38 (`%l`
 arguments stay 16 bit), 12 (the go-back case "previous == current library closes the window"
 of FUN_1008_9224 is not modelled). Audio model: `docs\AUDIO.md`; sprites and resources:
 `docs\SPRITES_ANIMATIONS.md`.
