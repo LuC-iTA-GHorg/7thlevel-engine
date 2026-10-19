@@ -76,19 +76,22 @@ static long play_next_midi(Viewer *vw)
 	return -1;
 }
 
-/* Looks for the SoundFont: --sf2, then tools\soundfont\ relative to the current folder and the executable. */
+/* Looks for the SoundFont: --sf2, then tools\soundfont\ (of the project or of the engine in
+ * engine\) relative to the current folder, then next to the executable and in ..\engine	ools. */
 static int load_soundfont(const char *sf2)
 {
 	char path[1024];
 	char *base = SDL_GetBasePath();
-	const char *cand[3] = { sf2, "tools/soundfont/" SF2_NAME, NULL };
-	char a[1024];
+	const char *cand[5] = { sf2, "tools/soundfont/" SF2_NAME, "engine/tools/soundfont/" SF2_NAME, NULL, NULL };
+	char a[1024], b[1024];
 	if (base) {
 		snprintf(a, sizeof(a), "%s%s", base, SF2_NAME);
-		cand[2] = a;
+		snprintf(b, sizeof(b), "%s../engine/tools/soundfont/%s", base, SF2_NAME);
+		cand[3] = a;
+		cand[4] = b;
 	}
 	int ok = 0;
-	for (int i = 0; i < 3 && !ok; i++) {
+	for (int i = 0; i < 5 && !ok; i++) {
 		if (!cand[i])
 			continue;
 		snprintf(path, sizeof(path), "%s", cand[i]);

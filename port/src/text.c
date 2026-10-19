@@ -76,7 +76,14 @@ int text_init(const char *basedir)
 		}
 		snprintf(p[3], sizeof(p[3]), "tools/fonts/%s", names[k][1]);
 		c[3] = p[3];
-		load_font(&fonts[k], c, 4);
+		/* game repository with the engine as a submodule in engine\ */
+		snprintf(p[4], sizeof(p[4]), "engine/tools/fonts/%s", names[k][1]);
+		c[4] = p[4];
+		if (basedir) {
+			snprintf(p[5], sizeof(p[5]), "%s../engine/tools/fonts/%s", basedir, names[k][1]);
+			c[5] = p[5];
+		}
+		load_font(&fonts[k], c, 6);
 	}
 	return fonts[0].ok || fonts[1].ok;
 }
