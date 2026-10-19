@@ -1,0 +1,53 @@
+# Files of the original game (copyrighted): copied by the user from the CD, never committed
+*.BIN
+*.bin
+*.EXE
+*.exe
+*.DLL
+*.dll
+*.BMP
+*.MID
+*.WAV
+*.TXT
+*.TTF
+*.ttf
+!/tools/fonts/*.ttf
+JOYSTICK/
+
+# Game state written by the program (settings, high scores) and local settings
+7THLEVEL.INI
+*.ini
+!*.ini.example
+*_trace*.txt
+
+# Generated: build\ also contains the game logic translated from the user's game files
+/build/
+/dist/
+/extracted/
+*.ico
+*.res
+*.o
+
+# Portable tools downloaded by tools\setup_tools.bat
+/tools/_downloads/
+/tools/w64devkit/
+/tools/SDL2/
+/tools/jdk/
+/tools/ghidra/
+/tools/ghidra_user/
+/tools/soundfont/*.sf2
+
+# Temporary and system files
+*.tmp
+*.log
+*.bak
+*.orig
+*.swp
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini

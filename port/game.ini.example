@@ -1,0 +1,23 @@
+; Settings of <game>.exe (<game> = GAME_NAME of the profile, e.g. bowl: bowl.exe, bowl.ini).
+; Copy next to <game>.exe as <game>.ini (or use <game>_launcher.exe, which creates it). The
+; command line takes precedence (--800 --640 --scale N --fullscreen --data FOLDER --sf2 FILE).
+[Port]
+; Resolution: 800 (800x600) or 640 (640x480). The game is drawn at this resolution.
+Resolution=800
+; Scale: 0 = the largest that fits the screen, 1..8 = window N times the resolution
+Scale=1
+Fullscreen=0
+; Filter: nearest (sharp pixels) or linear (smooth)
+Filter=nearest
+; IntegerScale: 1 = integer multiples only (black bars), 0 = fill the window
+IntegerScale=0
+Vsync=1
+; Volumes 0..100
+Volume=100
+MusicVolume=100
+; Trace=1 writes <game>_trace.txt (diagnostics)
+Trace=0
+; DataDir: folder of the .BIN files (empty = the folder of <game>.exe)
+DataDir=
+; SoundFont: .sf2 file (empty = GeneralUser-GS.sf2 next to <game>.exe)
+SoundFont=

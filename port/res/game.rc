@@ -1,0 +1,51 @@
+/* Windows resources of the port executable and of the launcher (windres, from build.bat, with
+ * -Ibuild for build\game.h): version information, manifest and, if build.bat extracted it from
+ * GAME_EXE_RES (lb7tool icon), the original game's icon. The icon is not in the repository: it
+ * comes from the game disc. The information does not present itself as a Disney or 7th Level
+ * product: this is an unofficial port. */
+#include <winver.h>
+#include <winuser.h>
+#include "game.h"
+
+#ifndef RES_FILE
+#define RES_FILE GAME_NAME ".exe"
+#endif
+#ifndef RES_DESC
+#define RES_DESC GAME_TITLE " - unofficial SDL2 port of the 7th Level Runtime Player"
+#endif
+
+#ifdef GAME_ICON
+1 ICON "game.ico"
+#endif
+
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "port.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     0, 5, 0, 0
+PRODUCTVERSION  0, 5, 0, 0
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+	BLOCK "StringFileInfo"
+	BEGIN
+		BLOCK "040904B0"
+		BEGIN
+			VALUE "CompanyName",      "LuC-iTA-GHorg (unofficial port)"
+			VALUE "FileDescription",  RES_DESC
+			VALUE "FileVersion",      "0.5.0.0"
+			VALUE "InternalName",     RES_FILE
+			VALUE "OriginalFilename", RES_FILE
+			VALUE "ProductName",      "SDL2 port of " GAME_TITLE
+			VALUE "ProductVersion",   "0.5.0.0"
+			VALUE "LegalCopyright",   "Port code: LuC-iTA-GHorg. The game and its data (.BIN) belong to their respective owners and are not included."
+			VALUE "Comments",         "Unofficial port, not affiliated with Disney or 7th Level. Requires the original game files."
+		END
+	END
+	BLOCK "VarFileInfo"
+	BEGIN
+		VALUE "Translation", 0x0409, 1200
+	END
+END

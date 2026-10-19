@@ -1,0 +1,5 @@
+/* Resources of the launcher: the same as the port executable with its own name and description. */
+#include "game.h"
+#define RES_FILE GAME_NAME "_launcher.exe"
+#define RES_DESC GAME_TITLE " - settings and launcher for the unofficial SDL2 port"
+#include "game.rc"
