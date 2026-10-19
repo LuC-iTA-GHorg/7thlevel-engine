@@ -61,6 +61,11 @@ typedef struct {
 typedef struct {
 	uint16_t click, click_arg, drag, drop;
 	uint8_t click_off, draggable, loaded;
+	/* in-memory record of FUN_1008_73DC for every entry: res_ld = loaded (pointer != 0, the
+	   "is loaded" of FUN_1008_74FA), res_ref = word +4 (sprites holding a bitmap/cel/movie/text
+	   member; FUN_1008_722A frees those only at 0). Cleared at every library open (72B0). */
+	uint8_t res_ld;
+	uint16_t res_ref;
 } RtObj;
 
 struct Rt {
@@ -175,7 +180,11 @@ struct Rt {
 	} zones[40];
 	int n_zones;
 	int zone_cur;              /* DAT_1538: zone under the cursor + 1, 0 = none */
-	RtObj *obj;                /* per index entry (type 17 only) */
+	RtObj *obj;                /* per index entry (input fields: type 17 only) */
+	/* palette: pal_base = DS:10E8 (library palette, op 60 replaces 10..245), pal = current
+	   (op 61); pal_dirty = the frame must apply pal */
+	uint8_t pal_base[256][3], pal[256][3];
+	int pal_dirty;
 	uint32_t n_obj;
 	uint16_t hover_script;     /* DAT_1542 (builtin 6F): script for entering/leaving sprites */
 	uint16_t hover_sprite;     /* DAT_1544: sprite under the cursor (encoded) */
@@ -249,6 +258,7 @@ unsigned rt_list_len(const Rt *rt, unsigned id);
 /* ---- instructions with known semantics */
 int rt_load(Rt *rt, unsigned id);     /* 0x02 */
 int rt_unload(Rt *rt, unsigned id);   /* 0x03 */
+int rt_is_loaded(Rt *rt, unsigned id); /* FUN_1008_74FA (opcode 20, 1A, ...) */
 int rt_show(Rt *rt, unsigned sprite, unsigned anim, int hide_first); /* 0x05 */
 void rt_link(Rt *rt, const char *file, int stop_audio, int ret); /* 0x12 */
 void rt_quit(Rt *rt);                 /* 0x0D */

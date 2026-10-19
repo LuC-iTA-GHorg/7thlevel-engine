@@ -66,7 +66,8 @@ Verification: `lb7tool anim FILE.BIN` → **2230 animations aligned out of 2230*
 |---|---|---|---|---|
 | 01 | 10 | 10848 | `{from, to, count, duration_ms}`: shows `count` frames running from..to, each for `duration_ms` (−1 = duration unchanged) | certain |
 | 02 | (n+4)·2 | 15059 | `{duration, state, n, n frames}`: **composite** frame made of several overlapping cels (−1 = skip), for `duration` | certain |
-| 03, 04 | 2 | 0 | | |
+| 03 | 2 | 0 | no case in 4AC2 nor in 471A: **one-tick no-op** (finishes, the next command runs on the following tick) | certain, ported |
+| 04 | 2 | 0 | FUN_1000_0426(0): only if a background **bitmap** exists (+0x448) and the sprite is visible: stamps the current image onto the background, hides the sprite (S_025) and **stops the animation** (S_010, the remaining commands are dropped); otherwise nothing | certain, ported |
 | 05 | 30 | 0 | curved path: parabola through three points (FUN_1000_1882 → 1820 → 1758, like builtin 73) | probable |
 | 06 | 8 | 568 | `{counter, repetitions, target}`: loop (jumps back to the offset) | certain |
 | 07 | 10 | 9 | (1000:42DE) | ? |
@@ -80,8 +81,9 @@ Verification: `lb7tool anim FILE.BIN` → **2230 animations aligned out of 2230*
 | 0F | 4 | 0 | frame interval (S_036, field +0x24) | certain, ported |
 | 10 | 8 | 0* | `{start, from, to}`: **frame loop** from..to (then from again), starting at `start` if it is within the range (FUN_1000_6A1A: fields +0x4C current, +0x4E/+0x50, direction +0x5D, active +0x5F); advances at every frame interval (cmd 11/0F) while the sprite moves (cmd 05/09/0A: 1000:1882/404A/4138 → 6B04). The animals flying in the menu flap their wings this way. *Built with builtin 5B (FUN_1000_5E2C, same order) | certain, ported |
 | 11 | 6 | 12 | `{movement interval, frame interval}` (S_041 → +0x20, S_036 → +0x24 if ≠ 0); the next step starts from now | certain, ported |
-| 12, 13 | 4 | 0 | | |
-| 14 | 2 | 0 | | |
+| 12 | 4 | 0* | `{frame}` (−1 = current): shows the sprite (S_043, first 6AA4(0, 1) = back in view) | certain, ported |
+| 13 | 4 | 0 | no case in 4AC2 (one-tick no-op); the EXE handler (CD0E case 0x13, FUN_1008_E67E) is unreachable because the DLL never calls the callback for it | certain, ported |
+| 14 | 2 | 0 | like 15/16 through FUN_1000_44DC (same guard): the EXE posts message 0x4C8 = run the deferred script `DAT_1502` (op 15) at the next loop iteration; consumes the tick | certain, ported (`rt->v1502` is run at the start of the next `rt_tick`) |
 | 15 | variable | 1284 | **event**: `+2` length, from `+4` a **script instruction** | certain |
 | 16 | 18 | 0* | **script call** `{script, n, up to 6 arguments}` (encoded operands, n raw): the DLL passes the command to the EXE (FUN_1000_44DC, length from table DS:0C0A), which performs the call immediately (FUN_1008_CC14 → CDAC). *Built by scripts with builtin 5B | certain, ported |
 | 17 | 12 | 7 | text (type 10 resource) (1000:4F68) | probable |
@@ -221,6 +223,57 @@ On-screen comparison between the original game running under OTVDM and the port.
   itself (TOPSMAIN 4032: wait 15-25 s then 16 → 4032) does not become a recursion.
 - "Cumulative" timings (cmd 0D): the wait (0B, FUN_1000_697C) starts from the previous deadline; a
   sprite that has been idle for a long time catches up one step per tick, like the original.
+
+## Implemented model (sprite.c / rt.c), with the original's references
+
+- **Tick order** (S_001): sprites are ticked in **draw-list order** (ascending layer, equal layer
+  in insertion order, FUN_1000_10D4), not by slot; a sprite unloaded or replaced during the pass is
+  skipped (`spr_update`).
+- **Event guard** (FUN_1000_44DC): a 14/15/16 command calls the EXE only if world +0xA82 (an event
+  callback is running) and +0xA84 (events suppressed, `S_061(0)`) are both 0; otherwise it returns 0
+  **without advancing** and is retried on a later tick. +0xA82 is set for the duration of the
+  callback (previous value restored) and the sprite is inactive (+0x66 = 0) meanwhile, so a nested
+  S_001 (a fade inside the event script) skips it. +0xA84 is set for the whole library switch
+  (FUN_1008_C5F8, fade out included). Port: `SprWorld.event_busy`, `events_off`, `Sprite.in_event`.
+- **Range checks**: cmd 01 with `from` or `to` ≥ frame count (unsigned, +0x46) finishes at once
+  without showing anything (FUN_1000_6A1A returns 0); cmd 02 skips members equal to −1 and drops the
+  whole command (nothing shown, its deadline already advanced) if a member is ≥ frame count
+  (FUN_1000_0D42). Builtins 5A/5B build a cmd 02 only with 2..10 frames + duration (FUN_1000_55B0),
+  otherwise they fail without touching the queue.
+- **Deadlines**: 0D zeroes the deadlines (the next wait counts from now); 0F (S_036) and 11 (S_041)
+  reset both the movement deadline (now + movement interval) and the frame deadline (now + frame
+  interval). The port keeps a single `next_ms` plus the cmd 10 `cyc_next`.
+- **Back in view** (6AA4(0, 1)): 01 02 05 09 0A, and also 12 (S_043) and 17 (FUN_1000_4F68).
+- **S_051** (op 24, drag): a relative move also shifts the targets of a running 05 (middle and end
+  point) or 09 (end point); the start is not shifted. **S_085** (builtin 98) shifts every sprite,
+  start and targets included (FUN_1000_6736).
+- **Display** (`spr_draw`): op 06 mode 2 = the composition buffer is no longer cleared (it is kept in
+  `SprWorld.comp`), other modes ≥ 3 = black; op 2A = clip rectangle (outside it the previous pixels
+  stay); op 27 = integer zoom of the composed image, dest = zoom·pos − (offset·zoom − 1). All reset by
+  the library switch (S_047, `spr_clear`). Op 06 transitions (+10) are **not** ported (unused).
+- **Palette**: `rt->pal_base` (DS:10E8, the library palette) and `rt->pal`; op 60 copies a type 14
+  resource (236 × RGBx) into 10..245 of both, op 61 fills a range with one colour or restores it from
+  the base; `main.c` applies `rt->pal` when `pal_dirty`.
+
+### Resources: the "loaded" record (FUN_1008_73DC / 740E / 722A / 74FA)
+
+Per index entry (`RtObj.res_ld`, `res_ref`, cleared at every library open like FUN_1008_72B0):
+
+| Type | Load (740E) | Unload (722A) | Loaded (74FA) |
+|---|---|---|---|
+| 1, 10, 18 | flag set | cleared only if no sprite holds it (`res_ref` = word +4) | flag |
+| 4, 9 | flag set (audio event created, no sound) | flag cleared, the sound stops | flag |
+| 11, 14, 15, 16 | flag set | nothing (stay until the library switch) | flag |
+| 12 | loads its bitmap, bitmap `res_ref`++ | if loaded and not held: bitmap `res_ref`−−, bitmap unloaded | flag |
+| 13 | loads every member, stops at the first failure | unloads every member | never |
+| 17 | sprite + every member in order (failure of one = load fails, rollback); members 1/10/12/18 `res_ref`++ | sprite destroyed, members 1/10/12/18 `res_ref`−−, every member unloaded (wave/MIDI members stop) | sprite exists |
+| other | 0 (the script ends) | nothing | never |
+
+Implicit loads that set the flag: running a script or list (`rt_enter`, D754/CC70), `show` with an
+animation (A990 → 740E(0x11) with members and 740E(0xF)), op 3F, op 60, builtin 65. Not yet: the
+implicit 740E(9)/740E(4) of the audio opcodes 08/50 (audio code, see `rt.c` op_wave). The default
+sprite (flag byte +0x14: own palette block, survives `link`) and lazy frames (+0x12) are not
+ported: both flags are 0 in every sprite of the 9 games.
 
 ## TOPSMAIN menu (verified flow)
 

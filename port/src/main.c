@@ -563,11 +563,12 @@ static const RtLib *game_shown;
 /* Palette and title of the current library (they change at every link). */
 static void game_sync_library(Rt *rt)
 {
+	if (rt->pal_dirty) { /* library palette, op 60/61 */
+		video_set_palette(game_video, (const uint8_t (*)[3])rt->pal);
+		rt->pal_dirty = 0;
+	}
 	if (rt->code == game_shown)
 		return;
-	uint8_t rgb[256][3];
-	lb7_palette(&rt->lib, rgb);
-	video_set_palette(game_video, rgb);
 	game_shown = rt->code;
 	char t[128];
 	snprintf(t, sizeof(t), GAME_TITLE " - %s", rt->code ? rt->code->file : "");

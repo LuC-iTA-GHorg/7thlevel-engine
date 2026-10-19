@@ -84,7 +84,7 @@ Lengths in bytes (L). "var" = length held in a word of the instruction.
 | 03 | 4 | `unload` | 1008:722A | certain | unloads/stops resource +2 according to type (A_012/A_013 sounds, S_013 sprite) |
 | 04 | 20 | `click` | 1008:3924 | certain | **click**: `+2` sprite (0 = rectangular area), `+4` script, `+6..+0xC` x1 y1 x2 y2 of the area, `+0xE` argument, flag `+0x10` all, `+0x11` re-enable only, `+0x12` disable; ported (section "Input") |
 | 05 | 8 | `show` | 1008:A990 | certain | +2 sprite (type 17), +4 animation (type 15) or 0 = fixed frame (the **raw** word 0, not decoded: `scr2c` fixed, it used to produce `G(0)`), +6 hide-first flag (`SPRITES_ANIMATIONS.md`) |
-| 06 | 16 | | 1008:0654 | certain (comparison with the original game running under OTVDM) | **background** `{mode, 800x600 bitmap, 640x480 bitmap, color}`: mode 1 = solid fill; ported (`spr_background`) |
+| 06 | 16 | | 1008:0654 | certain (comparison with the original game running under OTVDM) | **background** `{mode, 800x600 bitmap, 640x480 bitmap, color, transition, 2 parameters}` (FUN_1008_03CE): mode 0 = bitmap, 1 = solid fill, 2 = `S_031(0xFFFF, -1)`: the composition buffer is no longer cleared (what was drawn stays), any other mode = black (FUN_1008_0104 = `S_031(0, 0)`); ported (`spr_background`). Not ported: the transition `+10` (types 1..10, FUN_1008_0F10, applied only in mode 0 when a bitmap background exists; always 0 in the 9 games) |
 | 07 | 10 | `drag` | 1008:3A6E | certain | **drag** `{sprite, start script, release script, fixed}`: fixed = 0 makes the sprite draggable; with fixed ≠ 0 on the one being dragged it ends the drag (that is why it reads the cursor); ported. Not used by Upsy |
 | 08 | 28 | `wave` | 1008:8EAC | certain | **plays a wave** `{wave, block A_029}`: `+4` repetitions (0 once, −1 infinite), `+6` sets volume, `+7` **notify at end of sound**, `+9` volume 0..16, `+0xA`/`+0xE` fades in ms, `+0x12` delay in ms, `+0x1A` **end-of-sound script**, resolved when the wave starts (can be a local variable); resource not of type 9 = the script stops; ported (section "Audio") |
 | 09 | 4 | | 1008:8E92 | probable | A_027 (audio); not used by Upsy |
@@ -103,23 +103,23 @@ Lengths in bytes (L). "var" = length held in a word of the instruction.
 | 17 | 18 | `runnext` | 1008:A3D2 | certain | runs the next one of a list, cyclic |
 | 18 | 12 | `replace` | 1008:E740 | certain | **sprite replacement** `{old, new, animation, script, unload the old (byte), hide first (byte)}`: if the old one is loaded, the new one takes its place in the draw list (S_044), inherits images and position if it has none (FUN_1008_E4F4, S_045), otherwise the old one is hidden; then `show` of the new one and the script right away on the current frame (D754). 311 uses (poses of the menu characters); ported |
 | 19 | 6 | | 1008:8FBE | certain | `{sprite, byte}` = field +0x65 (S_004 = 1000:6B82): the `06` loops of the animation end; ported (`spr_break_loops`) |
-| 1A | 6 | | inline | certain | if the object is active → like 0x05 |
+| 1A | 6 | | 1008:CED0 case 0x1A | certain | `{sprite, animation}`: if the sprite is loaded (`73DC(id).+4` = DLL handle) → FUN_1008_A990(0, anim, sprite) = show without hiding. **Quirk**: the handler decodes both operands and A990 decodes them again (it expects encoded operands like op 05), so an id below 0x159F is read as the index of a variable/local and a larger one becomes `id + 0x7531`; ported as is (`rt_op`). Not in the translated logic of the 9 games |
 | 1B | 6 | `debug` | 1008:91B8 | certain | debug print (`_DEBUGSTR`) if enabled |
 | 1C | 6 | | 1008:9A20 | certain | `{sprite, level}`: draw level, ordered unsigned reinsertion (S_065); ported (`spr_set_layer`) |
 | 1D | 4 | | inline | certain | sets `DAT_1508`: script run when the window becomes active again (FUN_1008_E896, only with `AltTab=0`); in the games it is script 18 (resumes the pause, restarts the music with the script of `G(8)`); ported |
 | 1E | 8 | | 1010:25B8 | certain | **deferred call** `{script, arg1, arg2}` (in the decompiled C of FUN_1010_25B8 the order is `(arg2, arg1, script)`): queue of 40 records at DS:5893 run by the main loop (1008:4288 -> 1008:CDAC); ported (`rt->evq`). It does NOT play a wave (an earlier hypothesis was wrong) |
 | 1F | 4 | `cursor` | 1010:23E6 | certain | cursor mode (+2 byte, DAT_1514) |
-| 20 | 6 | | 1008:D0xx case 0x20 | certain | `{resource, script}`: if the resource is loaded (FUN_1008_74FA) runs the script with no arguments in the **same locals frame** (FUN_1008_D6D6 → CB06), or with script 0 ends the current script; otherwise nothing. Used by the Jungle games (JUNGPRTY.BIN); ported (loaded check for type 17 sprites, the only type used) |
+| 20 | 6 | | 1008:D0xx case 0x20 | certain | `{resource, script}`: if the resource is loaded (FUN_1008_74FA = `rt_is_loaded`) runs the script with no arguments in the **same locals frame** (FUN_1008_D6D6 → CB06), or with script 0 ends the current script; otherwise nothing. Loaded: types 1 4 9 10 11 12 14 15 16 18 = record of FUN_1008_73DC set by the loaders (op 02, sprite members, scripts and lists run, animations shown, op 60), 17 = sprite exists, any other type (13 included) = never. Used by the Jungle games (JUNGPRTY.BIN); ported |
 | 21 | 18 | `hit` | 1008:91A2 | certain | **collision** between two sprites `{A, B, script, arg1, arg2, repeat (byte), clear all (byte), A also hidden, B also hidden, mode}`: ordered pair (list at DS:5707, 14-byte records, FUN_1008_3E62); at every tick FUN_1008_4124 does the pixel test (S_048) and queues the script; without "repeat" the pair is removed; script 0 = removes the pair; ported |
 | 22 | 10 | `runindex` | 1008:A5BE | certain | runs `list[var]`, fallback options and auto-increment |
 | 23 | 4 | | inline | certain | sets `DAT_150E`: script of the Pause key (FUN_1008_3140), receives 1 = pause / 0 = resume; a returned value ≠ 0 (opcode 59) cancels the pause; without a script the pause only stops wave and music (A_042); while paused (`DAT_5B85`) the engine does no work and accepts only the Pause key; ported |
 | 24 | 8 | | 1008:9AD4 | certain | **relative move** `{sprite, dx, dy}` (S_051), only if the sprite is already loaded (no automatic loading, unlike 3F); ported |
 | 25 | 4 | `goto` | inline | certain | relative jump of +2 bytes |
 | 26 | 10 | `jumpifnot` | 1008:98CC | certain | compares +4 and +6 with the operator +8; if false jumps by +2 |
-| 27 | 8 | `fillrect?` | 1008:A876 | probable | `FILLRECT` with a solid brush |
+| 27 | 8 | `zoom` | 1008:A876 | certain | `{zoom, offset x, offset y}` (operands; zoom outside 0..4 → 0): display magnification of the sprite engine (S_053: +0x876 = zoom, +0x878/+0x87A = offset·zoom − 1; not zoomed if zoom 0 or zoom 1 without offset), drawn with `StretchDIBits` (dest = zoom·pos − offset·zoom + 1), then everything is redrawn (S_027); ported (`spr_set_zoom`, applied to the framebuffer in `spr_draw`). Not "FILLRECT" (that is only the window background of FUN_1008_EBF0) |
 | 28 | 8 | `getpos` | 1008:961C | certain | `{sprite, var x, var y}`: position of the sprite (S_054); ported |
 | 29 | 8 | `text` | 1010:1E82 | certain | **text** `{type-18 resource, format (string id), value}`: `wsprintf` into the resource buffer and redraw (1010:1DE8); ported (`spr_set_text`) |
-| 2A | 10 | | 1008:9022 | probable | sprite/scroll (S_056) |
+| 2A | 10 | `cliprect` | 1008:9022 | certain | `{x1, y1, x2, y2}` (operands, screen-centre relative): clip rectangle of the sprite engine (S_056, +0x86A..+0x870): valid only if x1 < x2 and y1 < y2, then inclusive; repaints happen only inside it, outside the old pixels stay; any other rect (e.g. all 0) = no clip; reset at every library switch (C5F8 `S_056(0, 0)`, S_047); ported (`spr_set_clip`) |
 | 2B | 10 | `switchvar` | 1008:A67C | certain | switch on a variable: +4 table, +6 default, +8 number of cases |
 | 2C | 0 | `end` | inline | certain | end of the script |
 | 2D | 2 | `nop` | inline | certain | |
@@ -144,7 +144,7 @@ Lengths in bytes (L). "var" = length held in a word of the instruction.
 | 44 | 6 | `visible` | 1008:A7B4 | certain | `{variable, sprite}`: variable = sprite visible (S_063); ported |
 | 45 | 2 | | 1008:B20A | probable | save/load to file (MMIO) |
 | 46 | 10 | | 1008:96FC | ? | |
-| 47 | 6 | | 1008:9122 | certain | `{sprite (0 = all), byte}`: stamps the sprite onto the background (FUN_1000_0426); byte 0 = then removes it; ported (`spr_stamp`) |
+| 47 | 6 | | 1008:9122 | certain | `{sprite (0 = all), byte}`: stamps the sprite onto the background (FUN_1000_0426: only with a background **bitmap** (+0x448) and the sprite visible); byte 0 = then removes it (S_025 + S_010); ported (`spr_stamp`) |
 | 48 | 6 | `settable` | inline | certain | `table_4090[+2] = +4` |
 | 49 | 6 | `setmouse` | inline | certain | `SETCURSORPOS` |
 | 4B | 24 | | 1008:941E | certain | **frame ids** `{sprite, 10 variables}`: the first variable is zeroed, then variable i (if ≠ 0) receives the resource id of frame i (S_023, field +0xE); ported |
@@ -159,7 +159,8 @@ Lengths in bytes (L). "var" = length held in a word of the instruction.
 | 5C | 14 | | 1008:9EAC | probable | MIDI messages (A_032) |
 | 5D | 4 | `volume` | 1008:A32A | certain | device volume one step up (`+2` ≠ 0) or down: `+3` 0 all, 1 wave, 2 MIDI, 3 auxiliary (CD); 32 levels (`>> 11` of the Windows volume, FUN_1008_8CBE); ported |
 | 5E | 6 | | 1010:1F58 | probable | `{type-18 text, word}`: changes the text color (record+4) and redraws; not used by the present games, not ported |
-| 60, 61 | 4, 12 | `palette?` | 1008:0770 / 067C | probable | palette animation (S_005 → `ANIMATEPALETTE`) |
+| 60 | 4 | `setpalette` | 1008:0770 | certain | `{palette resource (type 14)}`: loads it (740E(0xE)), copies 0x3B0 bytes = 236 × {R, G, B, flag} into the base palette DS:1110 (= DS:10E8 + 10·4) and applies them to colours 10..245 (S_005); ported (`rt->pal_base`/`rt->pal`, applied by the frame) |
+| 61 | 12 | `palfill` | 1008:067C | certain | `{first, count, restore byte, R G B flag}`: in palette mode only (always in the port): `first` (> 9, else nothing), `count` (≤ 0xEC) entries set to the colour at +8, or with the byte ≠ 0 restored from the base palette DS:10E8; applied at once (ANIMATEPALETTE); ported |
 | 6A | 4 | | inline | certain | enables the debug hook (`DAT_40DC`) |
 | 71 | 6 | `case` | – | certain | table entry `{0x71, value, target}` |
 | 77 | 18 | `setstring` | inline | certain | copies 16 characters into the global string DS:5BD8 |
@@ -188,10 +189,10 @@ in `port\src\rt.c`):
 | Opcode | Mnemonic / meaning | Notes |
 |---|---|---|
 | 09, 0E | audio A_027 / A_037 | not used |
-| 1A | like 05 if the object is active | |
-| 20 | if the resource is active, runs script +4 | pinball |
-| 27 | `FILLRECT` | |
-| 2A | sprite/scroll (S_056) | |
+| 1A | like 05 (without hiding) if the sprite is loaded; operands decoded twice (quirk) | |
+| 20 | if the resource is loaded (any type, FUN_1008_74FA), runs script +4 | Jungle games |
+| 27 | display zoom (S_053) | |
+| 2A | clip rectangle (S_056) | |
 | 30, 46 | to be analyzed (1008:952E, 1008:96FC) | |
 | 31 | angle between points (`GETANGLE`) | |
 | 32 | movement along an angle | pinball |
@@ -204,7 +205,7 @@ in `port\src\rt.c`):
 | 52, 55, 56, 57, 58 | controller: key sequences, mirror, state reading (53 and 54 are ported) | |
 | 5C | MIDI messages (A_032) | |
 | 5E | text color (type 18) | |
-| 60, 61 | animated palette (`ANIMATEPALETTE`) | |
+| 60, 61 | palette from a type 14 resource / fill or restore a range (S_005 → `ANIMATEPALETTE`) | |
 
 The Dual Bowling game needs only opcodes that are already ported; the pinball game needs 20, 32,
 3E, 43 and probably 31, 41, 42.
@@ -428,6 +429,8 @@ is called by the C generated by `scr2c` (`port\game\*.c`).
 | 8C | – | `DAT_10DE` = free memory (high word of `GetFreeSpace`, 64 KB units); the startup scripts compare it with 53 and 106 to choose the detail level | 1008:1002; written in `FUN_1000_04B0` | ported: always returns 0x7FFF (maximum) |
 | 90 | – | `GETVERSION`: the original returns 0x5F if the high byte (minor version) is `_` (0x5F, Windows 95), otherwise 0x1F | 1008:1002 | ported: 0x1F like Windows 3.1 |
 | 9A | `{value}` | `DAT_5B92 = value` (1 at startup, `FUN_1000_05E4`): if it is on and Ctrl+Shift are pressed, mouse and keyboard messages (1008:35B2, 383A, 3B3C, 3CEA) take the hidden path of dragging with screen capture (a hidden debugging feature of the original); TOPSCRED turns it off with 0; no return value | 1008:1002 | partly ported: returns the argument, without storing it (the hidden function does not exist in the port) |
+| 72 | `{&x, &y, step, steps, x0, y0, x1, y1}` | point of the segment: `x = x0 + R((x1 − x0)·step/steps)`, same for y, R = rounded half away from zero (unsigned step/steps); steps 0 = nothing written | S_073 → TOPSYS01 FUN_1000_3F84 | ported |
+| 98 | `{dx, dy}` | scrolls the whole scene: every sprite (position, start and targets of a running 05/09) moves by (dx, dy) (FUN_1000_6736); the original also scrolls the window with `ScrollDC` and repaints the uncovered strips | S_085 | ported (`spr_scroll_all`; the screen is redrawn every frame) |
 
 ### Builtins of the original NOT ported
 
@@ -448,7 +451,6 @@ returns 0. None is used by Upsy and Outwords. Descriptions are inferred from the
 | 63 | 1 | `lstrlen` of a string (id) |
 | 64 | 3 | `{string, substring, from}`: position of the substring starting at `from` (`strstr`, FUN_1018_0720), −1 if absent |
 | 68 | 1 | bitmap (type 1): value measured by FUN_1008_897A on a DC (0 if `DAT_0CF8` ≠ 0); to be analyzed |
-| 72 | 8 | `S_073` (TOPSYS01): 8-argument variant of 73, writes two variables; to be analyzed |
 | 74 | 2 | `{string, i}`: i-th character (0 past the end) |
 | 75 | 3 | `{string variable, i, character}`: writes a character (i < 0x7F) |
 | 76 | 1 | `atoi` of a string (copy into 112 bytes + CRT 1018:1464) |
@@ -469,7 +471,6 @@ returns 0. None is used by Upsy and Outwords. Descriptions are inferred from the
 | 95 | 1 | writes a default guest name into the string variable |
 | 96 | 1-3 | `WINEXEC` of the program (string), or FUN_1008_DB8C with a final script; returns 1 on success (the table above described it as "launches a program") |
 | 97 | 1 | `DAT_1540` = script run at the start of every wave |
-| 98 | 2 | `S_085` (TOPSYS01) |
 | 9B | 3 | stub: zeroes the first byte of the destination string (FUN_1008_B298) |
 | 9C | 3 | empty stub (FUN_1008_B2B0) |
 | ≥ B3 | – | DLL plug-in functions (`FUN_1008_2386`): they do not exist in the present games |
