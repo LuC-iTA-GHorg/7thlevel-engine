@@ -1,7 +1,7 @@
 /*
  * sprite - sprite and animation engine (port of TOPSYS01.DLL, Sprite Library 1.2).
  * Formats in src\docs\SPRITE_ANIM.md. Sprites from type 17 resources, frames (types 1 and 12),
- * animation commands 01 02 04 06 07 08 09 0B 0C 0D 0E 0F 10 11 12 15 16 17, layered drawing, hit
+ * animation commands 01..17 (03 and 13 one-tick no-ops), layered drawing, hit
  * tests. Events (0x15) are game logic translated to C (rt_anim_event), calls (0x16)
  * go through rt_anim_call.
  */
@@ -60,6 +60,8 @@ typedef struct {
 	/* cmd 09 in progress (FUN_1000_404A/3FEE): from (sx, sy) to (tx, ty) in steps */
 	int moving, mv_sx, mv_sy, mv_tx, mv_ty, mv_step, mv_steps;
 	int mv_curve, mv_mx, mv_my; /* cmd 05: curved path through the intermediate point (mx, my) */
+	int mv_op, mv_rel;      /* command of the movement (05, 09, 0A) and its relative flag (S_051) */
+	int in_event;           /* +0x66 = 0 while the EXE callback of its event runs (FUN_1000_44DC) */
 	/* cmd 0E (FUN_1000_6AA4, field +0x60 = 0): frozen image; position and frames
 	   change without being seen until cmd 0E 1 (or a cmd 01/02/09) makes it visible again */
 	int frozen, fz_x, fz_y, fz_flip_x, fz_flip_y, fz_n_shown;
@@ -107,6 +109,18 @@ typedef struct {
 	   pixels of the loaded resource change, so every frame using that bitmap sees them */
 	struct { uint16_t id; const uint8_t *data; Lb7Bitmap bmp; uint8_t *pix; } edited[32];
 	int n_edited;
+	/* event guard of FUN_1000_44DC: world +0xA82 = an event callback is running, +0xA84 = events
+	   suppressed (S_061(0), library switch); a 14/15/16 command then waits for a later tick */
+	int event_busy, events_off;
+	/* opcode 06 mode 2 (S_031(0xFFFF, -1), world +0x880 = 0xFFFF): the screen is not cleared */
+	int bg_keep;
+	/* opcode 2A (S_056, world +0x86A..+0x870): clip rectangle, screen-centre relative, right and
+	   bottom excluded; clip_on = 0 means the whole screen */
+	int clip_on, clip[4];
+	/* opcode 27 (S_053, world +0x876/+0x878/+0x87A): display zoom 1..4, source offset */
+	int zoom, zoom_x, zoom_y;
+	uint8_t *comp;          /* last composition (op 06 mode 2, op 2A), comp_w x comp_h */
+	int comp_w, comp_h;
 } SprWorld;
 
 /* Diagnostics (upsy --probe X Y): in the trace, every draw covering point (X, Y) of the
@@ -125,8 +139,15 @@ void spr_set_layer(SprWorld *w, unsigned id, int layer); /* opcode 1C (S_065) */
 void spr_break_loops(SprWorld *w, unsigned id, int on);  /* opcode 19 (S_004) */
 /* Opcode 47 (S_064): stamps sprite id onto the background (0 = all); keep=0 then removes it. */
 void spr_stamp(SprWorld *w, const Video *v, unsigned id, int keep);
-/* Opcode 06 {mode, bitmap 800x600, bitmap 640x480, color}: mode 1 = solid color. */
+/* Opcode 06 {mode, bitmap 800x600, bitmap 640x480, color} (FUN_1008_03CE): mode 0 = bitmap,
+ * 1 = solid color, 2 = the screen is no longer cleared, other = black. */
 void spr_background(SprWorld *w, int mode, unsigned bmp800, unsigned bmp640, int color);
+/* Opcode 2A (S_056): clip rectangle x1,y1,x2,y2 (inclusive); x1 >= x2 or y1 >= y2 = no clip. */
+void spr_set_clip(SprWorld *w, int x1, int y1, int x2, int y2);
+/* Opcode 27 (S_053): display zoom 0..4 with source offset; 0 = normal. */
+void spr_set_zoom(SprWorld *w, int zoom, int ox, int oy);
+/* Builtin 98 (S_085): moves every sprite (and its running movement) by (dx, dy). */
+void spr_scroll_all(SprWorld *w, int dx, int dy);
 /* Builtin 5A (immediate=1) / 5B (=0): animation command {sprite, command, values...}. */
 int spr_command(SprWorld *w, int immediate, unsigned argc, const int16_t *args);
 /* Topmost sprite under point (x, y) relative to the screen center (S_029):

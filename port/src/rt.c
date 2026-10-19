@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/time.h>
+#include <time.h>
 
 extern const RtLib *const game_libs[]; /* port\game\game_libs.c */
 
@@ -220,6 +222,9 @@ int rt_open_library(Rt *rt, const char *file)
 	rt->pad_kbd = rt->pad_mouse = rt->pad_joy = 0;
 	rt->joy_alt = 0;
 	sound_library_close(rt); /* FUN_1008_C5F8: resources unloaded, pending 0x52C removed, A_041 */
+	lb7_palette(&rt->lib, rt->pal_base); /* Lib_LoadPalette: DS:10E8 */
+	memcpy(rt->pal, rt->pal_base, sizeof(rt->pal));
+	rt->pal_dirty = 1;
 	/* sprite input data: the library reopens the resources, hence the values from the file */
 	free(rt->obj);
 	rt->n_obj = rt->lib.n_entries + rt->lib.extra_slots; /* including the copies created at runtime */
@@ -301,8 +306,15 @@ void rt_tick(Rt *rt, uint32_t now_ms)
 		else
 			snprintf(file, sizeof(file), "%s", rt->link_file);
 		snprintf(prev_file, sizeof(prev_file), "%s", rt->code ? rt->code->file : "");
-		rt_fade(rt, 0, 100); /* FUN_1008_C5F8: the library closes with the screen off */
+		/* FUN_1008_C5F8: S_061(0) (sprite events suppressed) for the whole switch, fade out
+		   included, until the new library is open */
+		SprWorld *sw = rt->spr;
+		if (sw)
+			sw->events_off = 1;
+		rt_fade(rt, 0, 100); /* the library closes with the screen off */
 		rt_open_library(rt, file);
+		if (sw)
+			sw->events_off = 0;
 	}
 }
 
@@ -317,6 +329,8 @@ int rt_enter(Rt *rt, unsigned id)
 		return 0;
 	}
 	rt->depth++;
+	if (rt->obj && id < rt->n_obj) /* implicit load of the script/list (D754 / CC70 -> 740E) */
+		rt->obj[id].res_ld = 1;
 	cov_mark(COV_SCRIPT, id); /* lists also pass through here: the report counts only scripts */
 	tr(rt, "> script %u\n", id);
 	return 1;
@@ -415,19 +429,115 @@ static RtObj *obj_of(Rt *rt, unsigned id)
 	return &rt->obj[id];
 }
 
+/* > 0 while the members of a sprite/cel/list are (un)loaded: not traced one by one */
+static int res_quiet;
+
+static RtObj *res_of(Rt *rt, unsigned id)
+{
+	return rt->obj && id < rt->n_obj ? &rt->obj[id] : NULL;
+}
+
+/* Member ids of a type 17 resource (data +6 = count, +0x16 = encoded ids). */
+static unsigned sprite_members(Rt *rt, unsigned id, uint16_t *out, unsigned max)
+{
+	Lb7Entry e = lb7_entry(&rt->lib, id);
+	const uint8_t *d = e.type == 17 && e.size >= 0x16 ? lb7_entry_data(&rt->lib, e) : NULL;
+	unsigned n = 0;
+	for (unsigned k = 0; d && k < lb7_rd16(d + 6) && 0x16 + k * 2 + 2 <= e.size && n < max; k++)
+		out[n++] = (uint16_t)(lb7_rd16(d + 0x16 + k * 2) - 0x8ACF);
+	return n;
+}
+
+/* FUN_1008_74FA: 1, 4, 9, 10, 11, 12, 14, 15, 16 and 18 = record loaded; 17 = DLL sprite exists;
+ * every other type (13 included) = 0. */
+int rt_is_loaded(Rt *rt, unsigned id)
+{
+	RtObj *o = res_of(rt, id);
+	switch (lb7_entry(&rt->lib, id).type) {
+	case 1: case 4: case 9: case 10: case 11: case 12: case 14: case 15: case 16: case 18:
+		return o && o->res_ld;
+	case 17:
+		return rt->spr && spr_loaded(rt->spr, id);
+	default:
+		return 0;
+	}
+}
+
 int rt_load(Rt *rt, unsigned id)
 {
 	unsigned type = lb7_entry(&rt->lib, id).type;
+	RtObj *o = res_of(rt, id);
 	/* FUN_1008_740E: types without a handler return 0 and the script stops */
 	switch (type) {
-	case 1: case 4: case 9: case 10: case 11: case 12: case 13: case 14: case 15: case 16:
-	case 17: case 18:
-		tr(rt, "   load %u (type %u)\n", id, type);
-		if (type == 17)
-			(void)obj_of(rt, id);
-		if (type == 17 && rt->spr)
-			return spr_load(rt->spr, id);
+	case 1: case 4: case 9: case 10: case 11: case 14: case 15: case 16: case 18:
+		/* 6756 / 6A66 / 6F7A / 6B16 / 6934 / 6EF2: the data (or the audio event) is created */
+		if (!res_quiet)
+			tr(rt, "   load %u (type %u)\n", id, type);
+		if (o)
+			o->res_ld = 1;
 		return 1;
+	case 12: { /* FUN_1008_67E6: loads the bitmap of the cel and counts one more holder */
+		if (!res_quiet)
+			tr(rt, "   load %u (type %u)\n", id, type);
+		if (o && !o->res_ld) {
+			Lb7Entry e = lb7_entry(&rt->lib, id);
+			const uint8_t *d = e.size >= 6 ? lb7_entry_data(&rt->lib, e) : NULL;
+			unsigned bid = d ? (uint16_t)(lb7_rd16(d) - 0x8ACF) : 0;
+			res_quiet++;
+			int ok = d && rt_load(rt, bid);
+			res_quiet--;
+			if (!ok)
+				return 0;
+			RtObj *b = res_of(rt, bid);
+			if (b)
+				b->res_ref++;
+			o->res_ld = 1;
+			o->res_ref = 0;
+		}
+		return 1;
+	}
+	case 13: { /* FUN_1008_69CE: loads every member, stops at the first failure; the list itself
+		is never "loaded" (74FA default) */
+		Lb7Entry e = lb7_entry(&rt->lib, id);
+		const uint8_t *d = lb7_entry_data(&rt->lib, e);
+		if (!res_quiet)
+			tr(rt, "   load %u (type %u)\n", id, type);
+		int ok = 1;
+		res_quiet++;
+		for (uint32_t k = 0; ok && d && k + 2 <= e.size; k += 2)
+			ok = rt_load(rt, (uint16_t)rt_operand(rt, rt->lstack, lb7_rd16(d + k)));
+		res_quiet--;
+		return ok;
+	}
+	case 17: { /* FUN_1008_6C08 + 6D44: the sprite, then its members in order (a member that
+		cannot be loaded makes the whole load fail); frames, cels, texts and movies count one
+		more holder (+4). Wave/MIDI members are only created (no sound starts). */
+		if (!res_quiet)
+			tr(rt, "   load %u (type %u)\n", id, type);
+		(void)obj_of(rt, id);
+		if (!rt->spr)
+			return 1;
+		if (spr_loaded(rt->spr, id))
+			return 1;
+		if (!spr_load(rt->spr, id))
+			return 0;
+		uint16_t m[256];
+		unsigned n = sprite_members(rt, id, m, 256);
+		for (unsigned k = 0; k < n; k++) {
+			unsigned t = lb7_entry(&rt->lib, m[k]).type;
+			res_quiet++;
+			int ok = rt_load(rt, m[k]);
+			res_quiet--;
+			if (!ok) {
+				spr_unload(rt->spr, id); /* 6442: rollback, members already counted stay so */
+				return 0;
+			}
+			RtObj *mo = res_of(rt, m[k]);
+			if (mo && (t == 1 || t == 10 || t == 12 || t == 18))
+				mo->res_ref++;
+		}
+		return 1;
+	}
 	default:
 		tr(rt, "   load %u: type %u has no handler\n", id, type);
 		return 0;
@@ -437,12 +547,65 @@ int rt_load(Rt *rt, unsigned id)
 int rt_unload(Rt *rt, unsigned id)
 {
 	unsigned type = lb7_entry(&rt->lib, id).type;
-	tr(rt, "   unload %u (type %u)\n", id, type);
-	if (type == 17 && rt->spr) {
-		int loaded = spr_loaded(rt->spr, id);
+	RtObj *o = res_of(rt, id);
+	if (!res_quiet)
+		tr(rt, "   unload %u (type %u)\n", id, type);
+	if (type == 17 && rt->spr && spr_loaded(rt->spr, id)) {
+		/* 6442 + 6502: the sprite is destroyed, then every member loses a holder (1, 10, 12,
+		   18) and is unloaded (722A): waves and MIDI members are destroyed (their sound stops) */
 		spr_unload(rt->spr, id);
-		if (loaded) /* FUN_1008_6442 -> 6502: the members are unloaded too */
-			sprite_members_unload(rt, id);
+		sprite_members_unload(rt, id); /* traces the wave/MIDI members that stop */
+		uint16_t m[256];
+		unsigned n = sprite_members(rt, id, m, 256);
+		for (unsigned k = 0; k < n; k++) {
+			unsigned t = lb7_entry(&rt->lib, m[k]).type;
+			RtObj *mo = res_of(rt, m[k]);
+			if (mo && mo->res_ref && (t == 1 || t == 10 || t == 12 || t == 18))
+				mo->res_ref--;
+			if (t != 17) {
+				res_quiet++;
+				(void)rt_unload(rt, m[k]);
+				res_quiet--;
+			}
+		}
+		return 1;
+	}
+	if (type == 12) { /* FUN_1008_6164: if loaded and no holder: the bitmap loses one holder */
+		if (o && o->res_ld && !o->res_ref) {
+			Lb7Entry e = lb7_entry(&rt->lib, id);
+			const uint8_t *d = e.size >= 6 ? lb7_entry_data(&rt->lib, e) : NULL;
+			unsigned bid = d ? (uint16_t)(lb7_rd16(d) - 0x8ACF) : 0;
+			RtObj *b = res_of(rt, bid);
+			if (b && b->res_ref)
+				b->res_ref--;
+			res_quiet++;
+			if (bid)
+				(void)rt_unload(rt, bid);
+			res_quiet--;
+			o->res_ld = 0;
+		}
+		return 1;
+	}
+	if (type == 13) { /* FUN_1008_6242: unloads every member */
+		Lb7Entry e = lb7_entry(&rt->lib, id);
+		const uint8_t *d = lb7_entry_data(&rt->lib, e);
+		if (!d)
+			return 0;
+		res_quiet++;
+		for (uint32_t k = 0; k + 2 <= e.size; k += 2)
+			(void)rt_unload(rt, (uint16_t)rt_operand(rt, rt->lstack, lb7_rd16(d + k)));
+		res_quiet--;
+		return 1;
+	}
+	if (type == 1 || type == 10 || type == 18) { /* 60EE / 63BC / 6648: freed only without holders */
+		if (o && o->res_ref)
+			return 1;
+		if (o)
+			o->res_ld = 0;
+	}
+	if (type == LB7_T_WAVE || type == LB7_T_MIDI) { /* 66CE / 6334: the event is destroyed */
+		if (o)
+			o->res_ld = 0;
 	}
 	if (type == 1 && rt->spr) /* the bitmap's memory is freed: changes by builtin 7D are lost */
 		spr_bitmap_forget(rt->spr, id);
@@ -461,7 +624,14 @@ int rt_show(Rt *rt, unsigned sprite, unsigned anim, int hide_first)
 	if (lb7_entry(&rt->lib, sprite).type != 17)
 		return 0;
 	(void)obj_of(rt, sprite);
-	return rt->spr ? spr_show(rt->spr, sprite, anim, hide_first) : 1;
+	/* FUN_1008_A990: with an animation, or a loaded sprite, 740E(0x11) loads it with its members;
+	   the animation goes through 740E(0xF) */
+	if (rt->spr && (anim || spr_loaded(rt->spr, sprite)) && !rt_load(rt, sprite))
+		return 0;
+	int ok = rt->spr ? spr_show(rt->spr, sprite, anim, hide_first) : 1;
+	if (ok && anim && rt->obj && anim < rt->n_obj)
+		rt->obj[anim].res_ld = 1;
+	return ok;
 }
 
 void rt_link(Rt *rt, const char *file, int stop_audio, int ret)
@@ -480,10 +650,46 @@ void rt_link(Rt *rt, const char *file, int stop_audio, int ret)
 		rt->waves[i].notify = 0;
 }
 
+/* Opcode 0D (Script_ExecOp case 0xD, 1008:CE92): with the string DS:5BD8 empty (opcode 77)
+ * PostMessage(WM_CLOSE); otherwise a link record {0x12, name = DS:5BD8, stop audio = 1, go back
+ * = 0} is built and run through FUN_1008_9224 instead of quitting. The script continues. */
 void rt_quit(Rt *rt)
 {
+	if (rt->str5bd8[0]) {
+		tr(rt, "   quit -> chain to \"%s\" (DS:5BD8)\n", rt->str5bd8);
+		rt_link(rt, rt->str5bd8, 1, 0);
+		return;
+	}
 	tr(rt, "   quit\n");
 	rt->quit = 1;
+}
+
+/* FUN_1010_2682: LoadString(code) in a MessageBox, DAT_1548 = code (every script stops),
+ * DAT_5B8B = 0, then WM_CLOSE. Here: stderr and trace instead of the message box. */
+void rt_error(Rt *rt, unsigned code)
+{
+	tr(rt, "!! runtime error 0x%02X: scripts stopped, the game closes\n", code);
+	fprintf(stderr, "7th Level runtime error 0x%02X\n", code);
+	rt->stop = (int)code;
+	rt->quit = 1;
+}
+
+int16_t rt_div(Rt *rt, int a, int b)
+{
+	if (!(int16_t)b) {
+		rt_error(rt, 0x6F);
+		return 0;
+	}
+	return (int16_t)((int16_t)a / (int16_t)b);
+}
+
+int16_t rt_mod(Rt *rt, int a, int b)
+{
+	if (!(int16_t)b) {
+		rt_error(rt, 0x6F);
+		return 0;
+	}
+	return (int16_t)((int16_t)a % (int16_t)b);
 }
 
 static unsigned pick_random(Rt *rt, uint8_t *last, unsigned n)
@@ -610,24 +816,79 @@ static const uint8_t pad_dir_code[16] = {
 	0x00, 0x03, 0x05, 0x88, 0x07, 0x0A, 0x0C, 0x88, 0x06, 0x09, 0x0B, 0x88, 0x88, 0x88, 0x88, 0x88
 };
 
+/* DS:0022 (TOPSY.EXE data segment): direction code of a mirrored player (opcode 57): left and
+ * right swapped. Codes beyond the table are left as they are. */
+static const uint8_t pad_mirror[16] = {
+	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x07, 0x06, 0x08, 0x0A, 0x09, 0x0C, 0x0B, 0x00, 0x00, 0x07
+};
+
+static uint8_t pad_mirrored(const struct RtPad *d, unsigned code)
+{
+	return (uint8_t)(d->mirror == 1 && code < 16 ? pad_mirror[code] : code);
+}
+
 /* FUN_1008_4DE8: a change of source src reaches the player that uses it, whose event script
- * is queued with (player, code). The key sequences (opcode 52/55, timer
- * FUN_1008_4C9E) are not used by the games and are not ported, like the mirror of opcode 52D0. */
+ * is queued with (player, code). Release codes (0xF7, 0xFB, 0xFD, 0xFE) and 0 (stop) only
+ * queue the script; directions and button presses also enter the history (h = h * 16 + code,
+ * high byte cleared first), and the first code of a run arms the timer FUN_1008_4C9E
+ * ([Input] Timeout ms) that matches the history against the opcode 56 table. A mirrored player
+ * (opcode 57) sees the direction codes through DS:0022, the state keeps the real one. */
 static void pad_event(Rt *rt, uint8_t code, unsigned src)
 {
 	unsigned p = src < sizeof(rt->pad_map) ? rt->pad_map[src] : 2;
 	if (p > 1)
 		return;
 	struct RtPad *d = &rt->pad[p];
-	if (code == 0xF7 || code == 0xFB || code == 0xFD || code == 0xFE)
+	int hist = 1;
+	if (code == 0xF7 || code == 0xFB || code == 0xFD || code == 0xFE) {
 		d->buttons &= code;
+		hist = 0;
+	}
+	else if (code == 0) {
+		d->dir = 0;
+		hist = 0;
+	}
 	else if (code == 1 || code == 2 || code == 4 || code == 8)
 		d->buttons |= code;
-	else
-		d->dir = code; /* 0 = stopped */
+	else {
+		d->dir = code;
+		code = pad_mirrored(d, code);
+	}
 	tr(rt, "-- controller %u: code 0x%02X\n", p, code);
-	if (d->script && !rt->text_id) /* FUN_1008_4DE8: no events while the text field is active */
+	if (rt->text_id) /* FUN_1008_4DE8: no events while the text field is active (DAT_1500) */
+		return;
+	if (d->script)
 		queue_call(rt, d->script, (uint16_t)(p + 0x8ACF), (uint16_t)(code + 0x8ACF));
+	if (!hist)
+		return;
+	if (!d->hist) { /* FUN_1008_DE1E(0, 4C9E, DAT_4929, 0, player + 2) */
+		d->hist_on = 1;
+		d->hist_due = rt->now_ms + rt->pad_timeout;
+	}
+	d->hist = (uint16_t)((d->hist & 0xFF) * 16 + code);
+}
+
+/* FUN_1008_4D4E (from the timer FUN_1008_4C9E, not decompiled: probable): the history is
+ * consumed; the first enabled entry of the opcode 56 table with a script and
+ * (mask & history) == pattern queues script(player, key), or with the latch on (opcode 55) is
+ * held back as pending. The original copies the pending record from the opcode 52 table at the
+ * same index (record + 0xC + i * 9), not from the matched entry: kept as it is. */
+static void pad_combo(Rt *rt, unsigned p)
+{
+	struct RtPad *d = &rt->pad[p];
+	uint16_t h = d->hist;
+	d->hist = 0;
+	for (unsigned i = 0; i < d->n_combo && i < 4; i++) {
+		const struct RtPadEntry *e = &d->combo[i];
+		if ((e->mask & h) != e->pattern || !e->enabled || !e->script)
+			continue;
+		tr(rt, "-- controller %u: combination %u (history 0x%04X)\n", p, i, h);
+		if (d->latch)
+			d->pending = d->seq[i];
+		else
+			queue_call(rt, e->script, (uint16_t)(p + 0x8ACF), e->key);
+		return;
+	}
 }
 
 /* FUN_1008_5BD8: press of a key of a set; 1 = not a controller key. */
@@ -688,6 +949,11 @@ static void pad_timers(Rt *rt)
 			uint8_t code = pad_dir_code[rt->pad_state[set]];
 			if (code != 0x88)
 				pad_event(rt, code, set + 1);
+		}
+	for (unsigned p = 0; p < 2; p++)
+		if (rt->pad[p].hist_on && (int32_t)(rt->now_ms - rt->pad[p].hist_due) >= 0) {
+			rt->pad[p].hist_on = 0;
+			pad_combo(rt, p);
 		}
 }
 
@@ -1039,10 +1305,18 @@ void rt_set_active(Rt *rt, int a)
 		pads_hold(rt, !a);
 		if (rt->code && !a) /* A_005(0): CD, MIDI and wave stopped and closed, no end notifications */
 			sound_deactivate(rt);
+		if (rt->code && rt->v150a) { /* builtin 8E: script(1 activated / 0 deactivated), FUN_1008_CDAC */
+			int16_t arg = (int16_t)a;
+			unsigned id = (uint16_t)rt_operand(rt, rt->lstack, rt->v150a);
+			tr(rt, "-- activation script %u (%d)\n", id, a);
+			(void)rt_call(rt, id, rt->lstack, 1, &arg);
+		}
 		rt->active_audio = (uint8_t)a;
 		waves_freeze(rt); /* FUN_1000_3D50: the wave events are mixed only while active */
-		if (!a)
+		if (!a) {
 			rt->drag_sprite = 0; /* FUN_1008_3900: drag cancelled */
+			rt->sel_on = 0;      /* and rectangle selection cancelled */
+		}
 	}
 	if (!rt->alt_tab && rt->code && a != rt->active) {
 		rt->active = (uint8_t)a;
@@ -1070,6 +1344,8 @@ void rt_load_settings(Rt *rt)
 	int mode640 = ini_get(rt, sec, "Mode640", buf, sizeof(buf)) ? atoi(buf) != 0 : rt->screen_w < 641;
 	rt->bg640 = (uint8_t)(mode640 || rt->lomem); /* FUN_1008_04BA: second bitmap of opcode 06 */
 	rt->max_joy = ini_get(rt, sec, "MaxJoySticks", buf, sizeof(buf)) ? atoi(buf) : 2;
+	/* DAT_4929 = GetPrivateProfileInt("Input", "Timeout", 200) (startup, TOPSY.c ~472) */
+	rt->pad_timeout = (uint16_t)(ini_get(rt, "Input", "Timeout", buf, sizeof(buf)) ? atoi(buf) : 200);
 	int found = 0;
 	if (ini_get(rt, "audio", "WaveVolume", buf, sizeof(buf))) {
 		rt->vol_wave = vol_from_ini(atoi(buf), 0);
@@ -1232,6 +1508,11 @@ void rt_mouse_move(Rt *rt, int x, int y)
 	rt->mouse_y = y;
 	G(5005) = (int16_t)x; /* DAT_3C64/3C66 */
 	G(5006) = (int16_t)y;
+	if (rt->sel_on) { /* 1008:3CEA: the selection follows the cursor (S_080 rubber rectangle) */
+		rt->sel[2] = (int16_t)x;
+		rt->sel[3] = (int16_t)y;
+		return;
+	}
 	if (rt->v1504 && !hook(rt, (uint16_t)rt->v1504, 4))
 		return;
 	if (rt->cursor_mode == 4)
@@ -1259,6 +1540,25 @@ void rt_mouse_button(Rt *rt, int x, int y, int button, int down)
 	tr(rt, "-- mouse %s %s at %d,%d\n", button == 1 ? "left" : "right", down ? "down" : "up", x, y);
 	if (rt->pad_mouse) { /* FUN_1008_3720 / 383A -> 8180 */
 		pad_event(rt, (uint8_t)(down ? button : ~button), 5);
+		return;
+	}
+	if (!down && button == 1 && rt->sel_on) { /* FUN_1008_383A: end of the selection, FUN_1008_31BC */
+		int16_t a[4];
+		memcpy(a, rt->sel, sizeof(a));
+		rt->sel_on = 0;
+		if (rt->v1546) {
+			unsigned id = (uint16_t)rt_operand(rt, rt->lstack, rt->v1546);
+			tr(rt, "-- selection %d,%d-%d,%d: script %u\n", a[0], a[1], a[2], a[3], id);
+			(void)rt_call(rt, id, rt->lstack, 4, a);
+		}
+		return;
+	}
+	if (down && button == 1 && rt->v1546 && !(rt->v5b92 && rt->key_down[0x10] && rt->key_down[0x11])) {
+		/* FUN_1008_35B2: with the DAT_1546 script a left press starts a rectangle selection
+		   (SetCapture, S_080) instead of a click; the rubber rectangle is not drawn here */
+		rt->sel_on = 1;
+		rt->sel[0] = rt->sel[2] = (int16_t)x;
+		rt->sel[1] = rt->sel[3] = (int16_t)y;
 		return;
 	}
 	if (!down) { /* FUN_1008_383A */
@@ -1711,12 +2011,17 @@ static void ini_escape(const char *in, char *out, size_t cap)
 	out[o] = 0;
 }
 
+/* FUN_1008_AC00 (Topsy variant): the character after '\' is lowercased (CRT tolower,
+ * FUN_1018_02B0) before it is interpreted, so "\N" is a newline and an unknown "\X" gives
+ * "x"; a '\' at the very end terminates the string and is dropped. */
 static void ini_unescape(const char *in, char *out, size_t cap)
 {
 	size_t o = 0;
 	while (*in && o + 1 < cap) {
-		if (*in == '\\' && in[1]) {
-			char c = in[1];
+		if (*in == '\\') {
+			if (!in[1])
+				break;
+			char c = in[1] >= 'A' && in[1] <= 'Z' ? (char)(in[1] + 0x20) : in[1]; /* ctype bit 1 */
 			out[o++] = c == 'n' ? '\n' : c == 'r' ? '\r' : c == 't' ? '\t' : c;
 			in += 2;
 		}
@@ -2862,6 +3167,137 @@ int16_t rt_operand(Rt *rt, int16_t *l, uint16_t enc)
 
 static void op_ray(Rt *rt, int16_t *l, const uint8_t *bytes);
 static void op_intersect(Rt *rt, int16_t *l, const uint8_t *bytes);
+static int16_t u_getangle(int16_t dx, int16_t dy);
+static int16_t u_sine(int16_t a);
+static int16_t u_cosine(int16_t a);
+
+/* Opcodes 52 / 56 {+2 player, +4 key, +6 script, +8 pattern, +0xA mask, +0xC all, +0xD enable,
+ * +0xE disable} (FUN_1008_4FCE: 50-entry table at record + 0xC; FUN_1008_4F0A: 4-entry table at
+ * record + 0x1CE, the one matched by FUN_1008_4D4E). Key, script, pattern and mask are the raw
+ * words of the instruction. */
+static void op_pad_table(Rt *rt, int16_t *l, const uint8_t *b, int combo)
+{
+	unsigned p = (uint16_t)rt_operand(rt, l, lb7_rd16(b + 2));
+	if (p > 1) /* the original indexes DS:44EA + p * 0x201 without checks */
+		return;
+	struct RtPad *d = &rt->pad[p];
+	struct RtPadEntry *t = combo ? d->combo : d->seq;
+	uint16_t *n = combo ? &d->n_combo : &d->n_seq;
+	unsigned max = combo ? 4 : 50;
+	struct RtPadEntry e = { lb7_rd16(b + 4), lb7_rd16(b + 6), lb7_rd16(b + 8), lb7_rd16(b + 0xA), 1 };
+	tr(rt, "   controller %u: %s table key 0x%04X script 0x%04X pattern 0x%04X mask 0x%04X (%u %u %u)\n",
+		p, combo ? "combination" : "sequence", e.key, e.script, e.pattern, e.mask, b[0xC], b[0xD], b[0xE]);
+	if (b[0xC]) { /* the whole table */
+		if (b[0xD] || b[0xE]) /* FUN_1008_4A3A */
+			for (unsigned i = 0; i < *n; i++)
+				t[i].enabled = b[0xD] != 0;
+		else if (!e.script)
+			*n = 0;
+		else /* FUN_1008_4A10 */
+			for (unsigned i = 0; i < *n; i++)
+				t[i].script = e.script;
+		return;
+	}
+	/* FUN_1008_4ACE: entry with the same key */
+	unsigned i = 0;
+	while (i < *n && t[i].key != e.key)
+		i++;
+	if (i >= max)
+		return;
+	if (b[0xD] || b[0xE]) /* (i == n: the free slot after the last one, as in the original) */
+		t[i].enabled = b[0xD] != 0;
+	else if (!e.script) { /* FUN_1008_4A84: removal */
+		if (i < *n) {
+			memmove(&t[i], &t[i + 1], (size_t)(*n - i - 1) * sizeof(*t));
+			(*n)--;
+		}
+	}
+	else if (!e.pattern) { /* key and script updated in place; the count does not change */
+		t[i].key = e.key;
+		t[i].script = e.script;
+	}
+	else if (*n < max) { /* FUN_1008_4972: new entry, sorted by descending pattern, enabled */
+		unsigned j = 0;
+		while (j < *n && t[j].pattern > e.pattern)
+			j++;
+		memmove(&t[j + 1], &t[j], (size_t)(*n - j) * sizeof(*t));
+		t[j] = e;
+		(*n)++;
+	}
+}
+
+/* Opcode 45 (FUN_1008_B20A): copies 7THLEVEL.INI to the first free 7thlevel.001 .. .999 of the
+ * same folder ("7thlevel.%03i", FUN_1008_AE40; 7thlevel.999 if all exist), in 1 KB blocks
+ * (FUN_1008_AB1C). The original works in the Windows folder; the port uses the folder of its
+ * own INI (ini_path). */
+static void ini_backup(Rt *rt)
+{
+	char dst[sizeof(rt->ini_path) + 16];
+	size_t dl = strlen(rt->ini_path);
+	while (dl && rt->ini_path[dl - 1] != '/' && rt->ini_path[dl - 1] != '\\')
+		dl--;
+	FILE *in = fopen(rt->ini_path, "rb");
+	if (!in) {
+		tr(rt, "   INI backup: %s missing\n", rt->ini_path);
+		return;
+	}
+	for (int k = 1; k <= 999; k++) {
+		snprintf(dst, sizeof(dst), "%.*s7thlevel.%03i", (int)dl, rt->ini_path, k);
+		FILE *t = fopen(dst, "rb");
+		if (!t)
+			break;
+		fclose(t);
+	}
+	FILE *out = fopen(dst, "wb");
+	if (out) {
+		char buf[1024];
+		size_t r;
+		while ((r = fread(buf, 1, sizeof(buf), in)) > 0)
+			fwrite(buf, 1, r, out);
+		fclose(out);
+	}
+	fclose(in);
+	tr(rt, "   INI backup -> %s%s\n", dst, out ? "" : " (failed)");
+}
+
+/* Opcodes 30 / 46 (FUN_1008_952E INT 21h AH=2Ah, FUN_1008_96FC AH=2Ch): four destination
+ * variables, each written only if its operand word is not 0. */
+static void op_datetime(Rt *rt, int16_t *l, const uint8_t *b, int time_of_day)
+{
+	struct timeval tv;
+	if (gettimeofday(&tv, NULL)) {
+		tv.tv_sec = (long)time(NULL);
+		tv.tv_usec = 0;
+	}
+	time_t sec = (time_t)tv.tv_sec;
+	const struct tm *tm = localtime(&sec);
+	if (!tm)
+		return;
+	int16_t v[4];
+	if (time_of_day) { /* hour, minute, second, hundredths */
+		v[0] = (int16_t)tm->tm_hour;
+		v[1] = (int16_t)tm->tm_min;
+		v[2] = (int16_t)tm->tm_sec;
+		v[3] = (int16_t)(tv.tv_usec / 10000);
+	}
+	else { /* day of the week (0 = Sunday), month 1-12, day 1-31, full year */
+		v[0] = (int16_t)tm->tm_wday;
+		v[1] = (int16_t)(tm->tm_mon + 1);
+		v[2] = (int16_t)tm->tm_mday;
+		v[3] = (int16_t)(tm->tm_year + 1900);
+	}
+	for (int k = 0; k < 4; k++)
+		if (lb7_rd16(b + 2 + k * 2))
+			set_var(rt, l, lb7_rd16(b + 2 + k * 2), v[k]);
+}
+
+/* Instructions that are not in Script_ExecOp (its default: error 0x73). */
+static int op_known(unsigned op)
+{
+	if (op == 0 || op == 0x33 || op == 0x4A || op == 0x5A || op == 0x5B || op == 0x5F)
+		return 0;
+	return op <= 0x61 || op == 0x6A || op == 0x71 || op == 0x77 || op == 0x8D || op == 0x8F;
+}
 
 int rt_op(Rt *rt, int16_t *l, const uint8_t *bytes)
 {
@@ -2985,6 +3421,66 @@ int rt_op(Rt *rt, int16_t *l, const uint8_t *bytes)
 				(uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 4)),
 				(uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 6)), lb7_rd16(bytes + 8));
 		return 1;
+	case 0x1A: { /* {sprite, animation}: show without hiding only if the sprite is loaded (TOPSY
+		1008:CED0 case 0x1A, 73DC(sprite).+4 != 0). Quirk of the original: both operands are
+		decoded here and then passed to FUN_1008_A990, which decodes them AGAIN (a990 expects
+		encoded operands like op 05): an id below 0x159F is read as a variable/local index, a
+		larger one becomes id + 0x7531 */
+		unsigned sid = (uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 2));
+		if (lb7_entry(&rt->lib, sid).type != 17 || !rt->spr || !spr_loaded(rt->spr, sid))
+			return 1;
+		uint16_t aenc = (uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 4));
+		unsigned sprite = (uint16_t)rt_operand(rt, l, (uint16_t)sid);
+		unsigned anim = aenc ? (uint16_t)rt_operand(rt, l, aenc) : 0;
+		tr(rt, "   op 1A: sprite %u loaded -> show %u anim %u\n", sid, sprite, anim);
+		(void)rt_show(rt, sprite, anim, 0);
+		return 1;
+	}
+	case 0x27: { /* {zoom 0..4, offset x, offset y}: display zoom (1008:A876 -> S_053, then S_027) */
+		int z = rt_operand(rt, l, lb7_rd16(bytes + 2));
+		int ox = rt_operand(rt, l, lb7_rd16(bytes + 4)), oy = rt_operand(rt, l, lb7_rd16(bytes + 6));
+		tr(rt, "   zoom %d offset %d,%d\n", z, ox, oy);
+		if (rt->spr)
+			spr_set_zoom(rt->spr, z, ox, oy);
+		return 1;
+	}
+	case 0x2A: { /* {x1, y1, x2, y2}: clip rectangle of the sprite engine (1008:9022 -> S_056) */
+		int x1 = rt_operand(rt, l, lb7_rd16(bytes + 2)), y1 = rt_operand(rt, l, lb7_rd16(bytes + 4));
+		int x2 = rt_operand(rt, l, lb7_rd16(bytes + 6)), y2 = rt_operand(rt, l, lb7_rd16(bytes + 8));
+		tr(rt, "   clip %d,%d - %d,%d\n", x1, y1, x2, y2);
+		if (rt->spr)
+			spr_set_clip(rt->spr, x1, y1, x2, y2);
+		return 1;
+	}
+	case 0x60: { /* {palette resource}: (1008:0770) 740E(0xE), 0x3B0 bytes = 236 x {R, G, B, flag}
+		into the base palette DS:1110 (= DS:10E8 + 10 * 4) and applied to 10..245 (S_005) */
+		unsigned id = (uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 2));
+		Lb7Entry e = lb7_entry(&rt->lib, id);
+		const uint8_t *d = lb7_entry_data(&rt->lib, e);
+		tr(rt, "   palette %u (type %u)\n", id, e.type);
+		if (e.type != 14 || !rt_load(rt, id) || !d)
+			return 0;
+		for (uint32_t i = 0; i < 236 && i * 4 + 3 <= e.size; i++) {
+			memcpy(rt->pal_base[10 + i], d + i * 4, 3);
+			memcpy(rt->pal[10 + i], d + i * 4, 3);
+		}
+		rt->pal_dirty = 1;
+		return 1;
+	}
+	case 0x61: { /* {first, count, restore byte, R G B flag}: (1008:067C, palette mode only) count
+		entries (<= 0xEC) from first (> 9) set to the colour, or restored from the base palette */
+		unsigned first = (uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 2));
+		unsigned cnt = (uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 4));
+		if (first <= 9)
+			return 1;
+		if (cnt > 0xEC)
+			cnt = 0xEC;
+		tr(rt, "   palette %u..+%u %s\n", first, cnt, bytes[6] ? "restored" : "filled");
+		for (unsigned i = first; i < first + cnt && i < 256; i++)
+			memcpy(rt->pal[i], bytes[6] ? rt->pal_base[i] : bytes + 8, 3);
+		rt->pal_dirty = 1;
+		return 1;
+	}
 	case 0x19: /* {sprite, byte}: field +0x65, the animation loops end (S_004) */
 		if (rt->spr)
 			spr_break_loops(rt->spr, (uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 2)), bytes[4]);
@@ -3039,12 +3535,7 @@ int rt_op(Rt *rt, int16_t *l, const uint8_t *bytes)
 		with no arguments (FUN_1008_D6D6) or, with script 0, ends the current script like op 2C;
 		otherwise does nothing. Used by the Jungle games (JUNGPRTY.BIN, sprite 416 -> script 415) */
 		unsigned res = (uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 2));
-		unsigned type = lb7_entry(&rt->lib, res).type;
-		int loaded = 0;
-		if (type == 17)
-			loaded = rt->spr && spr_loaded(rt->spr, res);
-		else
-			tr(rt, "   ?? op 20: loaded check for type %u not ported\n", type);
+		int loaded = rt_is_loaded(rt, res);
 		tr(rt, "   resource %u loaded: %d\n", res, loaded);
 		if (!loaded)
 			return 1;
@@ -3090,8 +3581,75 @@ int rt_op(Rt *rt, int16_t *l, const uint8_t *bytes)
 			spr_move(rt->spr, id, rt_operand(rt, l, lb7_rd16(bytes + 4)), rt_operand(rt, l, lb7_rd16(bytes + 6)));
 		return 1;
 	}
+	case 0x30: /* {weekday, month, day, year} (1008:952E) */
+	case 0x46: /* {hour, minute, second, hundredths} (1008:96FC) */
+		op_datetime(rt, l, bytes, op == 0x46);
+		return 1;
+	case 0x31: { /* {dest, x0, y0, x1, y1}: dest = GETANGLE(x1 - x0, y1 - y0), like builtin 31 (1008:79F0) */
+		int x0 = rt_operand(rt, l, lb7_rd16(bytes + 4)), y0 = rt_operand(rt, l, lb7_rd16(bytes + 6));
+		int x1 = rt_operand(rt, l, lb7_rd16(bytes + 8)), y1 = rt_operand(rt, l, lb7_rd16(bytes + 10));
+		set_var(rt, l, lb7_rd16(bytes + 2), u_getangle((int16_t)(x1 - x0), (int16_t)(y1 - y0)));
+		return 1;
+	}
+	case 0x41: /* {dest, angle}: COSINE (1008:7D70) */
+	case 0x42: { /* SINE */
+		int16_t a = rt_operand(rt, l, lb7_rd16(bytes + 4));
+		set_var(rt, l, lb7_rd16(bytes + 2), op == 0x42 ? u_sine(a) : u_cosine(a));
+		return 1;
+	}
+	case 0x34: /* {resource (type 3 file or type 1 bitmap), file name, tile}: "7th Level Living Wall
+		Paper" (1008:9FAA -> 1010:2B9E): the resource becomes <WindowsDir>\name and the Windows
+		desktop wallpaper ([Desktop] Wallpaper/TileWallPaper in WIN.INI, SPI_SETDESKWALLPAPER).
+		Deliberately not done: a port must not change the user's desktop. No game uses it. */
+		tr(rt, "   wallpaper %d \"%s\" (tile %u): desktop not changed\n", rt_operand(rt, l, lb7_rd16(bytes + 2)),
+			rt_string(rt, lb7_rd16(bytes + 4)) ? rt_string(rt, lb7_rd16(bytes + 4)) : "", bytes[6]);
+		return 1;
+	case 0x45: /* backup copy of 7THLEVEL.INI (1008:B20A) */
+		ini_backup(rt);
+		return 1;
+	case 0x52: /* controller table edit (1008:4FCE) */
+	case 0x56: /* controller combination table edit (1008:4F0A) */
+		op_pad_table(rt, l, bytes, op == 0x56);
+		return 1;
+	case 0x55: { /* {player, latch, fire} (1008:5190) */
+		unsigned p = (uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 2));
+		if (p > 1)
+			return 1;
+		struct RtPad *d = &rt->pad[p];
+		int16_t latch = rt_operand(rt, l, lb7_rd16(bytes + 4));
+		d->latch = (uint8_t)latch;
+		if (!latch && rt_operand(rt, l, lb7_rd16(bytes + 6)) && d->pending.script) {
+			/* queued as {pending script, raw operand +2 - 0x7531, pending key}: the script
+			   receives the raw word of the player operand (as in the original) */
+			tr(rt, "   controller %u: pending combination fired\n", p);
+			queue_call(rt, d->pending.script, (uint16_t)(lb7_rd16(bytes + 2) - 0x7531), d->pending.key);
+		}
+		d->pending.script = 0;
+		return 1;
+	}
+	case 0x57: { /* {player, flag}: mirrored directions (1008:52D0) */
+		unsigned p = (uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 2));
+		if (p < 2)
+			rt->pad[p].mirror = rt_operand(rt, l, lb7_rd16(bytes + 4)) != 0;
+		return 1;
+	}
+	case 0x58: { /* {player, var direction, var buttons, var pending} (1008:5092) */
+		unsigned p = (uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 2));
+		if (p > 1)
+			return 1;
+		const struct RtPad *d = &rt->pad[p];
+		set_var(rt, l, lb7_rd16(bytes + 4), pad_mirrored(d, d->dir));
+		set_var(rt, l, lb7_rd16(bytes + 6), d->buttons);
+		set_var(rt, l, lb7_rd16(bytes + 8), (int16_t)(d->latch && d->pending.script));
+		return 1;
+	}
 	}
 	const char *nm = lb7_op_name(op);
+	if (!op_known(op)) { /* default of Script_ExecOp: runtime error 0x73, the script ends */
+		tr(rt, "   op %02X is not an instruction\n", op);
+		rt_error(rt, 0x73);
+		return 0;
+	}
 	rt->unimpl_op[op & 0xFF]++;
 	tr(rt, "   ?? op %02X%s%s not yet ported\n", op, nm ? " " : "", nm ? nm : "");
 	return 1;
@@ -3349,7 +3907,10 @@ int16_t rt_builtin(Rt *rt, unsigned id, unsigned argc, const int16_t *a)
 			x++;
 		return (int16_t)x;
 	}
-	case 0x90: return 0x1F; /* GETVERSION: 0x5F if the high byte (minor version) is 0x5F = Windows 95, otherwise 0x1F (TOPSY Engine_Command) */
+	/* GETVERSION: 0x5F if the high byte (minor version) is 0x5F = Windows 95, otherwise 0x1F
+	 * (TOPSY Engine_Command). Deliberately 0x1F: the value a 16-bit program sees on Windows 3.1
+	 * and NT (NTVDM reports 3.10); the port does not pretend to be Windows 95. */
+	case 0x90: return 0x1F;
 	case 0x93: /* idle timeout (DAT_150C): (script, seconds); input re-arms it */
 		rt->timer_script = a[0] ? (uint16_t)(a[0] - 0x7531) : 0; /* encoded operand */
 		if (rt->timer_script) {
@@ -3391,7 +3952,11 @@ int16_t rt_builtin(Rt *rt, unsigned id, unsigned argc, const int16_t *a)
 	/* DAT_10DE: free memory (GetFreeSpace) in 64 KB units; the startup scripts
 	 * compare it with 53 and 106 to choose the detail. On a modern PC: maximum. */
 	case 0x8C: return 0x7FFF;
-	case 0x9A: return a[0]; /* DAT_5B92 = argument */
+	case 0x9A: /* DAT_5B92 = argument (byte): Ctrl+Shift capture mode of the original; stored, and
+		it only lets Ctrl+Shift+click bypass the rectangle selection (the capture itself,
+		FUN_1010_2A52, is a debugging aid of the authors and is not ported) */
+		rt->v5b92 = argc ? (uint8_t)a[0] : 0;
+		return argc ? a[0] : (int16_t)id;
 	case 0x97: /* script queued after every opcode 08, with the wave as argument (DAT_1540) */
 		rt->wave_hook = a[0] ? (uint16_t)(a[0] + 0x8ACF) : 0;
 		tr(rt, "   wave start script = %d\n", a[0]);
@@ -3409,8 +3974,11 @@ int16_t rt_builtin(Rt *rt, unsigned id, unsigned argc, const int16_t *a)
 		unsigned id = lb7_copy_entry(&rt->lib, src);
 		if (!id)
 			return 0;
-		if (rt->obj && src < rt->n_obj && id < rt->n_obj) /* the in-memory data is copied */
+		if (rt->obj && src < rt->n_obj && id < rt->n_obj) { /* the in-memory data is copied */
 			rt->obj[id] = rt->obj[src];
+			rt->obj[id].res_ld = 0;
+			rt->obj[id].res_ref = 0;
+		}
 		tr(rt, "   copy of sprite %u -> %u\n", src, id);
 		(void)rt_load(rt, id); /* FUN_1008_740E(0x11, ...) */
 		return (int16_t)id;
@@ -3516,10 +4084,13 @@ int16_t rt_builtin(Rt *rt, unsigned id, unsigned argc, const int16_t *a)
 		if (argc < 3 || !spr_ok(rt, (uint16_t)a[0]))
 			return 0x8A;
 		return (int16_t)spr_hit_id(rt->spr, (uint16_t)a[0], a[1], a[2]);
-	case 0x78: /* {dx, dy}: window shake with ScrollDC forward, back and forward
-		(S_075): net displacement is zero, not visible in the port */
+	case 0x78: /* {dx, dy}: window shake (S_075): ScrollDC of the client area by (dx, dy), then
+		(-2dx, -2dy), then (dx, dy), net displacement zero; here the frame on screen is presented
+		shifted by +d, -d and back (rt->shake, provided by the window owner) */
 		tr(rt, "   shake %d,%d\n", argc ? a[0] : 0, argc > 1 ? a[1] : 0);
-		return 0;
+		if (rt->shake && argc > 1)
+			rt->shake(rt, a[0], a[1]);
+		return (int16_t)id;
 	case 0x79: { /* {high, low, &high, &low}: (*&high, *&low) += (high, low), number in base
 		10000 as two words (scores); 32-bit arithmetic of the CRT (1018:05EE/0554/0620) */
 		int16_t *ph = rt_int2ptr(rt, a[2]), *pl = rt_int2ptr(rt, a[3]);
@@ -3530,6 +4101,29 @@ int16_t rt_builtin(Rt *rt, unsigned id, unsigned argc, const int16_t *a)
 	}
 	case 0x6E: /* DAT_5B7E: alternate joystick reading (FUN_1008_575C); no joystick */
 		rt->joy_alt = a[0] != 0;
+		return 0;
+	case 0x72: { /* {&x, &y, step, steps, x0, y0, x1, y1}: point of the segment (S_073 -> TOPSYS01
+		1000:3F84), d * step / steps rounded half away from zero; steps 0 = nothing written */
+		if (argc < 8 || !(uint16_t)a[3])
+			return 0;
+		uint32_t total = (uint16_t)a[3], step = (uint16_t)a[2];
+		int16_t r[2];
+		for (int k = 0; k < 2; k++) {
+			int32_t d = (int32_t)a[6 + k] - a[4 + k];
+			int32_t q = d < 0 ? -(int32_t)(((uint32_t)-d * step + total / 2) / total)
+				: (int32_t)(((uint32_t)d * step + total / 2) / total);
+			r[k] = (int16_t)(a[4 + k] + q);
+		}
+		int16_t *px = rt_int2ptr(rt, a[0]), *py = rt_int2ptr(rt, a[1]);
+		if (px)
+			*px = r[0];
+		if (py)
+			*py = r[1];
+		return 0;
+	}
+	case 0x98: /* {dx, dy}: scrolls the whole scene (S_085) */
+		if (argc >= 2 && rt->spr)
+			spr_scroll_all(rt->spr, a[0], a[1]);
 		return 0;
 	case 0x73: { /* {&x, &y, passo, passi, x0, y0, xm, ym, x1, y1}: point of the parabola that passes
 		through (x0,y0) at the start, (xm,ym) at the middle and (x1,y1) at the end (S_074 -> TOPSYS01 1000:1758) */
@@ -3589,6 +4183,123 @@ int16_t rt_builtin(Rt *rt, unsigned id, unsigned argc, const int16_t *a)
 		}
 		return rt_operand(rt, rt->lstack, old);
 	}
+	/* Functional forms of opcodes 02 / 03 / 05 / 0A / 0B (Engine_Command 1008:1002): they never
+	 * end the script. Builtins that leave no result ("break" in Engine_Command) leave the
+	 * expression cell holding the builtin id, so they return id. */
+	case 0x02: /* load(id): FUN_1008_740E(RESGETTYPE(id), id) */
+		return argc ? (int16_t)rt_load(rt, (uint16_t)a[0]) : 0;
+	case 0x03: /* unload(id): FUN_1008_722A */
+		return argc ? (int16_t)rt_unload(rt, (uint16_t)a[0]) : 0;
+	case 0x05: /* show(sprite, anim[, hide first]): FUN_1008_A990; anim is always a resource id */
+		if (argc < 2)
+			return 0;
+		return (int16_t)rt_show(rt, (uint16_t)a[0], (uint16_t)a[1], argc > 2 ? a[2] != 0 : 0);
+	case 0x0A: /* fadein(speed) FUN_1008_48EA / fadeout(speed) FUN_1008_492E */
+	case 0x0B:
+		rt_fade(rt, id == 0x0A, argc ? (uint16_t)a[0] : 0);
+		return (int16_t)id;
+	case 0x1B: { /* debugf(format, args...): wvsprintf into 72 bytes, OutputDebugString if Debug=1 */
+		const char *f = argc ? rt_string(rt, (uint16_t)a[0]) : NULL;
+		if (f) {
+			RtArg x[16];
+			unsigned n = argc - 1 > 16 ? 16 : argc - 1;
+			for (unsigned k = 0; k < n; k++) {
+				x[k].is_str = 0;
+				x[k].v = a[1 + k];
+			}
+			char buf[72];
+			format16(rt, buf, sizeof(buf), f, n, x);
+			tr(rt, "   debug: \"%s\"\n", buf);
+			if (rt->debug)
+				fprintf(stderr, "%s\n", buf);
+		}
+		return (int16_t)id;
+	}
+	case 0x2F: /* keystate(vk): GetKeyState(vk) < 0 */
+		return (int16_t)(argc && (uint16_t)a[0] < 0x100 && rt->key_down[(uint16_t)a[0]]);
+	case 0x5F: /* startdrag(sprite) (FUN_1008_4324): if loaded it becomes the dragged sprite (DAT_14FE) */
+		if (!argc || !spr_ok(rt, (uint16_t)a[0]))
+			return 0;
+		rt->drag_sprite = (uint16_t)(a[0] + 0x8ACF);
+		rt->drag_x = rt->mouse_x; /* the next mouse move drags it relative to the cursor */
+		rt->drag_y = rt->mouse_y;
+		tr(rt, "   drag of sprite %d started\n", a[0]);
+		return 1;
+	case 0x63: { /* strlen(s); NULL string: no result */
+		const char *s = argc ? rt_string(rt, (uint16_t)a[0]) : NULL;
+		return s ? (int16_t)strlen(s) : (int16_t)id;
+	}
+	case 0x64: { /* strstr(s, sub, from): absolute index or -1 */
+		const char *s = argc > 2 ? rt_string(rt, (uint16_t)a[0]) : NULL;
+		const char *sub = argc > 2 ? rt_string(rt, (uint16_t)a[1]) : NULL;
+		if (!s || !sub || a[2] < 0 || (size_t)a[2] >= strlen(s)) /* (negative "from": undefined in the original) */
+			return -1;
+		const char *p = strstr(s + a[2], sub);
+		return p ? (int16_t)(p - s) : -1;
+	}
+	case 0x74: { /* charat(s, i): (signed char) s[i], 0 if NULL or strlen(s) < i */
+		const char *s = argc > 1 ? rt_string(rt, (uint16_t)a[0]) : NULL;
+		if (!s || a[1] < 0 || (size_t)a[1] > strlen(s))
+			return 0;
+		return (int16_t)(signed char)s[a[1]];
+	}
+	case 0x75: { /* setchar(string variable, i, ch): i < 0x7F, no terminator handling */
+		char *d = argc > 2 ? str_dest(rt, (uint16_t)a[0]) : NULL;
+		if (d && (uint16_t)a[1] < 0x7F)
+			d[(uint16_t)a[1]] = (char)a[2];
+		return (int16_t)id;
+	}
+	case 0x76: { /* atoi(s) of the CRT (16 bit), via a 112-byte copy */
+		const char *s = argc ? rt_string(rt, (uint16_t)a[0]) : NULL;
+		char buf[112];
+		if (!s)
+			return 0;
+		snprintf(buf, sizeof(buf), "%s", s);
+		return (int16_t)atoi(buf);
+	}
+	case 0x8B: /* DAT_14FA: GetDriveType of the drive of the first library (2 removable, 3 fixed,
+		4 remote/CD-ROM). The port always runs from an installed copy: fixed disk */
+		return 3;
+	case 0x8E: /* setactivescript(script): DAT_150A, called by rt_set_active (1008:E896) */
+		rt->v150a = argc && a[0] ? (uint16_t)(a[0] + 0x8ACF) : 0;
+		return argc ? a[0] : (int16_t)id;
+	case 0x91: /* setselectscript(script): DAT_1546; 0 also cancels a selection (FUN_1008_3900) */
+		rt->v1546 = argc && a[0] ? (uint16_t)(a[0] + 0x8ACF) : 0;
+		if (!rt->v1546)
+			rt->sel_on = 0;
+		return argc ? a[0] : (int16_t)id;
+	case 0x92: /* {movie, value}: word +0x3A of the loaded type 10 movie (FUN_1010_1550); no
+		reader of that field exists in TOPSY.EXE or its DLLs, and the port has no movie objects */
+		tr(rt, "   movie %d field 0x3A = %d (no effect)\n", argc ? a[0] : 0, argc > 1 ? a[1] : 0);
+		return (int16_t)id;
+	case 0x68: /* printbitmap(id) (FUN_1008_8BD0): bitmap to the default Windows printer. Not
+		available in the port: the result of a missing printer, 0 */
+		tr(rt, "   print bitmap %d: no printer\n", argc ? a[0] : 0);
+		return 0;
+	case 0x94: /* iconbitmap(bitmap, file, index) (FUN_1008_87D0): ExtractIcon of a Win16 EXE/DLL/ICO
+		drawn into the bitmap. Not available: the failure result, 0 */
+		tr(rt, "   icon %d of \"%s\" into bitmap %d: not available\n", argc > 2 ? a[2] : 0,
+			argc > 1 && rt_string(rt, (uint16_t)a[1]) ? rt_string(rt, (uint16_t)a[1]) : "", argc ? a[0] : 0);
+		return 0;
+	case 0x95: { /* defaultname(string variable): "guest" (DS:001C) */
+		char *d = argc ? str_dest(rt, (uint16_t)a[0]) : NULL;
+		if (d)
+			strcpy(d, "guest");
+		return (int16_t)id;
+	}
+	case 0x96: /* exec(program[, parameters[, script]]): WinExec, or with a script FUN_1008_DB8C (game
+		window hidden, ShellExecute, script when the program closes). Deliberately disabled: a
+		game script must not start programs on the user's machine; result of a failed launch, 0 */
+		tr(rt, "   run \"%s\": disabled\n", argc && rt_string(rt, (uint16_t)a[0]) ? rt_string(rt, (uint16_t)a[0]) : "");
+		return 0;
+	case 0x9B: { /* (a, b, dest): leftover, empties the string variable dest (FUN_1008_B298) */
+		char *d = argc > 2 ? str_dest(rt, (uint16_t)a[2]) : NULL;
+		if (d)
+			d[0] = 0;
+		return (int16_t)id;
+	}
+	case 0x9C: /* (a, b, c): leftover, does nothing (FUN_1008_B2B0) */
+		return (int16_t)id;
 	default:
 		rt->unimpl_builtin[id & 0xFF]++;
 		tr(rt, "   ?? builtin %02X (%u arguments) not yet ported\n", id, argc);

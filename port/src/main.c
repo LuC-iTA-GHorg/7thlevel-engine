@@ -563,11 +563,12 @@ static const RtLib *game_shown;
 /* Palette and title of the current library (they change at every link). */
 static void game_sync_library(Rt *rt)
 {
+	if (rt->pal_dirty) { /* library palette, op 60/61 */
+		video_set_palette(game_video, (const uint8_t (*)[3])rt->pal);
+		rt->pal_dirty = 0;
+	}
 	if (rt->code == game_shown)
 		return;
-	uint8_t rgb[256][3];
-	lb7_palette(&rt->lib, rgb);
-	video_set_palette(game_video, rgb);
 	game_shown = rt->code;
 	char t[128];
 	snprintf(t, sizeof(t), GAME_TITLE " - %s", rt->code ? rt->code->file : "");
@@ -623,6 +624,21 @@ static void game_frame(Rt *rt)
 	SDL_PumpEvents(); /* the window stays responsive; events stay queued as in the original */
 }
 
+/* Builtin 78 (S_075, TOPSYS01): the original scrolls the window contents by (dx, dy), (-2dx, -2dy)
+ * and (dx, dy) in a row: a jolt with no net displacement. Here the last frame is presented shifted
+ * by +d and -d for one frame each, then back in place; nothing is redrawn or animated meanwhile. */
+static void game_shake(Rt *rt, int dx, int dy)
+{
+	(void)rt;
+	const int off[3][2] = { { dx, dy }, { -dx, -dy }, { 0, 0 } };
+	for (int k = 0; k < 3; k++) {
+		video_set_offset(game_video, off[k][0], off[k][1]);
+		video_present(game_video);
+		if (!clk_step && k < 2)
+			SDL_Delay(16);
+	}
+}
+
 /* Game with a window: translated logic (rt), sprites and animations (sprite.c), 8-bit video.
  * Frame loop: time -> timers and library changes -> animations -> drawing. */
 static int game_window(const char *datadir, const char *lib, int w, int h, int scale, const char *tracefile,
@@ -674,6 +690,7 @@ static int game_window(const char *datadir, const char *lib, int w, int h, int s
 	rt_init(&rt, dir, trace);
 	game_profile(&rt, dir, trace);
 	rt.frame = game_frame;
+	rt.shake = game_shake;
 	rt.screen_w = w; /* G(5003)/G(5004): the game picks 800x600 or 640x480 from here */
 	rt.screen_h = h;
 	rt.spr = wp;

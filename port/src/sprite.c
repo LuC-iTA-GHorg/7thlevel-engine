@@ -116,17 +116,34 @@ void spr_clear(SprWorld *w)
 	for (int i = 0; i < w->n_edited; i++)
 		free(w->edited[i].pix);
 	w->n_edited = 0;
+	free(w->comp);
+	w->comp = NULL;
+	/* S_047 (library switch): no zoom, no clip, background colour 0 (S_031(0, 0)) */
+	w->zoom = w->zoom_x = w->zoom_y = 0;
+	w->clip_on = 0;
+	w->bg_keep = 0;
+	w->bg_color = 0;
+}
+
+/* Background used at this resolution: [0] 800x600, [1] 640x480 (Mode640/LoMem). */
+static int bg_index(SprWorld *w, const Video *v)
+{
+	return (w->rt ? w->rt->bg640 : video_width(v) < 800) ? 1 : 0;
 }
 
 void spr_background(SprWorld *w, int mode, unsigned bmp800, unsigned bmp640, int color)
 {
 	unsigned ids[2] = { bmp800, bmp640 };
-	w->bg_color = color;
+	/* FUN_1008_03CE: mode 1 -> 0104 + S_031(color); mode 2 -> 0104 (S_031(0, 0) = black) then
+	   S_031(0xFFFF, -1): world +0x880 = 0xFFFF, the composition buffer is no longer cleared and
+	   what was drawn stays (trails); any other mode -> 0104 alone = solid black */
+	w->bg_keep = mode == 2;
+	w->bg_color = mode == 1 ? color : mode == 0 ? color : 0;
 	for (int i = 0; i < w->n_stamps; i++) /* new background: the previous stamps disappear */
 		free(w->stamps[i].pix);
 	w->n_stamps = 0;
 	for (int k = 0; k < 2; k++) {
-		unsigned id = mode == 1 ? 0 : ids[k];
+		unsigned id = mode == 0 ? ids[k] : 0;
 		if (w->bg_id[k] == id)
 			continue;
 		free(w->bg[k].pix);
@@ -283,6 +300,7 @@ static void stop_anim(SprWorld *w, Sprite *s)
 	s->step_left = 0;
 	s->waiting = 0;
 	s->moving = 0;
+	s->mv_op = 0;
 	s->after_pos = 0;
 	/* S_010: image back in view (+0x60), no cumulative timing (+0x63) and no
 	   loop exit (+0x65) */
@@ -380,7 +398,8 @@ int spr_command(SprWorld *w, int immediate, unsigned argc, const int16_t *a)
 		break;
 	case 0x02: { /* {duration, state, n, frames...} <- (frames..., duration) */
 		unsigned k = nv ? nv - 1 : 0;
-		if (k > 24) k = 24;
+		if (k < 2 || k > 10) /* FUN_1000_55B0: argc - 2 in 3..11 (2..10 frames), else failure */
+			return 0;
 		c[1] = K(nv ? v[nv - 1] : 0); c[2] = 0; c[3] = (uint16_t)k;
 		for (unsigned i = 0; i < k; i++)
 			c[4 + i] = K(v[i]);
@@ -610,6 +629,7 @@ static void run_anim(SprWorld *w, Sprite *s)
 			if (s->mv_step < s->mv_steps)
 				return;
 			s->moving = 0;
+			s->mv_op = 0;
 			s->pc += lb7_anim_len(s->anim + s->pc, s->anim_size - s->pc);
 			cmd_done(s);
 			return;
@@ -676,6 +696,13 @@ static void run_anim(SprWorld *w, Sprite *s)
 			int lo = anim_val(w, rd16(p + 2)), hi = anim_val(w, rd16(p + 4));
 			set_live(s, 1); /* FUN_1000_6AA4(0, 1, ...) */
 			s->cyc_on = 0;  /* cmd 01 sets its own interval (+0x4E/+0x50) */
+			if ((unsigned)(uint16_t)lo >= (unsigned)s->n_frames || (unsigned)(uint16_t)hi >= (unsigned)s->n_frames) {
+				/* FUN_1000_6A1A: from or to outside the frames (+0x46, unsigned) -> counter 0:
+				   360E finishes at once, nothing shown, no wait */
+				s->pc += n;
+				cmd_done(s);
+				return;
+			}
 			s->step_left = (hi >= lo ? hi - lo : lo - hi) + 1;
 			s->step_frame = 0;
 			if (s->step_left <= 0) {
@@ -689,16 +716,28 @@ static void run_anim(SprWorld *w, Sprite *s)
 			unsigned k = rd16(p + 6);
 			set_live(s, 1);
 			s->cyc_on = 0;
-			s->n_shown = 0;
 			s->visible = 1; /* like cmd 01 */
-			for (unsigned i = 0; i < k && s->n_shown < SPR_MAX_LAYERS; i++) {
-				int f = anim_val(w, rd16(p + 8 + i * 2));
-				if (f >= 0 && f < s->n_frames)
-					s->shown[s->n_shown++] = f;
+			int bad = 0, sh[SPR_MAX_LAYERS], nsh = 0;
+			for (unsigned i = 0; i < k; i++) {
+				unsigned f = (uint16_t)anim_val(w, rd16(p + 8 + i * 2));
+				if (f == 0xFFFF) /* FUN_1000_0D42: member -1 is skipped */
+					continue;
+				if (f >= (unsigned)s->n_frames) { /* >= +0x46: the whole command is dropped */
+					bad = 1;
+					break;
+				}
+				if (nsh < SPR_MAX_LAYERS)
+					sh[nsh++] = (int)f;
 			}
 			s->pc += n;
 			int dur = (int16_t)rd16(p + 2) == -1 ? 0 : anim_val(w, rd16(p + 2));
-			schedule(w, s, dur);
+			schedule(w, s, dur); /* the deadline (+0x1C) is advanced before the members are read */
+			if (bad) { /* goto 0D79: returns 1, nothing shown */
+				cmd_done(s);
+				return;
+			}
+			s->n_shown = nsh;
+			memcpy(s->shown, sh, sizeof(int) * (size_t)nsh);
 			s->waiting = 1;
 			return;
 		}
@@ -733,16 +772,34 @@ static void run_anim(SprWorld *w, Sprite *s)
 			continue;
 		}
 		case 0x08: s->visible = 0; s->pc += n; cmd_done(s); return;
-		case 0x04: /* stamps the sprite onto the background and removes it (FUN_1000_0426(0, ...)) */
+		case 0x04: /* stamps the sprite onto the background and removes it (FUN_1000_0426(0, ...)):
+			only with a background bitmap (+0x448) and the sprite visible (+0x56); then S_025 hides it
+			and S_010 stops the animation (the remaining commands are dropped) */
 			s->pc += n;
-			if (w->last_video) {
+			if (w->last_video && s->visible && w->bg[bg_index(w, w->last_video)].data) {
 				sprite_images(w, w->last_video, s, add_stamp, w);
 				s->visible = 0;
+				stop_anim(s);
+				return;
 			}
 			cmd_done(s);
 			return;
+		case 0x03: /* no case in 4AC2 (default: returns 1) and none in 471A: one-tick no-op */
+		case 0x13: /* no case in 4AC2 either; the EXE handler (1008:CD0E case 0x13, FUN_1008_E67E)
+			is never reached because the DLL does not call the callback for it */
+			s->pc += n;
+			cmd_done(s);
+			return;
+		case 0x14: /* {}: FUN_1000_44DC like 15/16 -> EXE 1008:CD0E posts message 0x4C8
+			(FUN_1008_EAD0: runs the deferred script DAT_1502 = rt->v1502, which rt_tick runs at
+			the start of the next tick). Blocked while an event runs or events are off */
+			if (w->event_busy || w->events_off)
+				return;
+			s->pc += n;
+			return;
 		case 0x17: { /* movie {type 10 resource, ...} (TOPSYS01 4AC2 -> 4F68; TOPSY 1010) */
 			unsigned id = (uint16_t)anim_val(w, rd16(p + 2));
+			set_live(s, 1); /* FUN_1000_4F68 starts with 6AA4(0, 1) */
 			movie_stop(w, s);
 			if (!lb7_movie_open(w->lib, id, &s->mv)) {
 				w->unknown_cmd[0x17]++;
@@ -758,6 +815,7 @@ static void run_anim(SprWorld *w, Sprite *s)
 		}
 		case 0x12: { /* shows the sprite, frame +2 (-1 = the current one) (S_043) */
 			uint16_t f = rd16(p + 2);
+			set_live(s, 1); /* S_043 calls 6AA4(0, 1) first */
 			s->visible = 1;
 			if (f < (unsigned)s->n_frames) {
 				s->shown[0] = f;
@@ -776,7 +834,12 @@ static void run_anim(SprWorld *w, Sprite *s)
 			schedule(w, s, anim_val(w, rd16(p + 2)));
 			s->waiting = 1;
 			return;
-		case 0x0D: s->cumulative = rd16(p + 2) != 0; s->pc += n; continue;
+		case 0x0D: /* {byte}: +0x63 cumulative timing; the movement and frame deadlines
+			(+0x18..+0x1E) become 0: the next wait counts from now */
+			s->cumulative = (uint8_t)rd16(p + 2) != 0;
+			s->next_ms = 0;
+			s->pc += n;
+			continue;
 		case 0x09: { /* movement {steps, speed, relative, x, y} (FUN_1000_471A, case 9) */
 			set_live(s, 1);
 			s->mv_sx = s->x;
@@ -791,6 +854,7 @@ static void run_anim(SprWorld *w, Sprite *s)
 			}
 			s->mv_step = 0;
 			s->mv_curve = 0;
+			s->mv_op = 0x09;
 			if (s->mv_steps <= 0) {
 				s->pc += n;
 				continue;
@@ -813,6 +877,7 @@ static void run_anim(SprWorld *w, Sprite *s)
 			s->mv_steps = anim_val(w, rd16(p + 2));
 			s->mv_step = 0;
 			s->mv_curve = 1;
+			s->mv_op = 0x05;
 			if (s->mv_steps <= 0) { /* the original would divide by 0 */
 				s->pc += n;
 				continue;
@@ -832,6 +897,8 @@ static void run_anim(SprWorld *w, Sprite *s)
 			s->mv_steps = 1;
 			s->mv_step = 0;
 			s->mv_curve = 0;
+			s->mv_op = 0x0A;
+			s->mv_rel = rd16(p + 2) != 0;
 			s->moving = 1;
 			s->visible = 1;
 			schedule(w, s, s->move_ms);
@@ -853,7 +920,10 @@ static void run_anim(SprWorld *w, Sprite *s)
 			s->move_ms = anim_val(w, rd16(p + 2));
 			if (rd16(p + 4))
 				s->frame_ms = anim_val(w, rd16(p + 4));
+			/* S_041/S_036 reset both deadlines: +0x18 = now + movement interval, +0x1C = now +
+			   frame interval */
 			s->next_ms = w->now_ms + (uint32_t)(s->move_ms > 0 ? s->move_ms : 0);
+			s->cyc_next = w->now_ms + (uint32_t)(s->frame_ms > 0 ? s->frame_ms : 0);
 			s->pc += n;
 			continue;
 		case 0x10: { /* {start, from, to}: frame cycle during movements (FUN_1000_6A1A) */
@@ -882,23 +952,43 @@ static void run_anim(SprWorld *w, Sprite *s)
 			return;
 		case 0x0F: /* {frame interval} (S_036) */
 			s->frame_ms = anim_val(w, rd16(p + 2));
+			/* S_036 also resets both deadlines (+0x18 = now + movement interval, +0x1C = now +
+			   frame interval) */
+			s->next_ms = w->now_ms + (uint32_t)(s->move_ms > 0 ? s->move_ms : 0);
+			s->cyc_next = w->now_ms + (uint32_t)(s->frame_ms > 0 ? s->frame_ms : 0);
 			s->pc += n;
 			continue;
 		case 0x16: { /* script call {script, n, arguments} (EXE 1008:CC14 via callback) */
 			uint8_t cmd[18] = { 0 };
 			uint16_t sid = s->id;
+			/* FUN_1000_44DC: with an event already running (+0xA82) or events off (+0xA84) it
+			   returns 0 without advancing: the command is retried on a later tick */
+			if (w->event_busy || w->events_off)
+				return;
 			memcpy(cmd, p, n < sizeof(cmd) ? n : sizeof(cmd));
 			s->pc += n;
+			int busy = w->event_busy;
+			w->event_busy = 1;
+			s->in_event = 1; /* +0x66 = 0: S_001 skips the sprite during the callback */
 			rt_anim_call(w->rt, sid, cmd);
+			w->event_busy = busy;
+			s->in_event = 0;
 			/* as for 0x15: the next command starts on the next tick (44DC -> 471A) */
 			return;
 		}
 		case LB7_ANIM_EVENT: {
 			uint32_t off = s->pc;
 			uint16_t aid = s->anim_id, sid = s->id;
+			if (w->event_busy || w->events_off) /* FUN_1000_44DC: retried on a later tick */
+				return;
 			s->pc += n;
 			w->rt->g[5017] = (int16_t)sid; /* DS:3C7C: event's sprite (callback 1008:CC5x) */
+			int busy = w->event_busy;
+			w->event_busy = 1;
+			s->in_event = 1;
 			rt_anim_event(w->rt, aid, off);
+			w->event_busy = busy;
+			s->in_event = 0;
 			/* FUN_1000_44DC: after the event the engine prepares the next command, which is
 			   executed on the next tick (S_081); the event may also have restarted the sprite */
 			return;
@@ -911,12 +1001,26 @@ static void run_anim(SprWorld *w, Sprite *s)
 	}
 }
 
+/* S_001 (S_081): the sprites are ticked in draw-list order (ascending layer, then insertion
+ * order, FUN_1000_10D4), skipping inactive (+0x66) and paused (+0x67) ones. A sprite removed or
+ * replaced during the pass (its slot reused: other seq) is skipped. */
 void spr_update(SprWorld *w, uint32_t now_ms)
 {
 	w->now_ms = now_ms;
+	Sprite *order[SPR_MAX];
+	int seq[SPR_MAX], n = 0;
 	for (int i = 0; i < SPR_MAX; i++)
-		if (w->spr[i].used && w->spr[i].anim && !w->spr[i].paused) /* S_081 skips +0x67 */
-			run_anim(w, &w->spr[i]);
+		if (w->spr[i].used && w->spr[i].anim)
+			order[n++] = &w->spr[i];
+	if (n > 1)
+		qsort(order, (size_t)n, sizeof(order[0]), cmp_layer);
+	for (int i = 0; i < n; i++)
+		seq[i] = order[i]->seq;
+	for (int i = 0; i < n; i++) {
+		Sprite *s = order[i];
+		if (s->used && s->seq == seq[i] && s->anim && !s->paused && !s->in_event)
+			run_anim(w, s);
+	}
 }
 
 /* Decodes (once) the pixels of a frame. */
@@ -1086,6 +1190,8 @@ void spr_stamp(SprWorld *w, const Video *v, unsigned id, int keep)
 	if (!v)
 		return;
 	w->last_video = v;
+	if (!w->bg[bg_index(w, v)].data) /* FUN_1000_0426: nothing without a background bitmap (+0x448) */
+		return;
 	for (int i = 0; i < SPR_MAX; i++) {
 		Sprite *s = &w->spr[i];
 		if (!s->used || !s->visible || (id && s->id != id))
@@ -1308,13 +1414,69 @@ int spr_visible(SprWorld *w, unsigned id)
 	return s && s->visible;
 }
 
+/* S_051 (TOPSYS01 1000:0058): relative move; with a 05 or 09 running its targets move too (05:
+ * middle and end point, 09: end point; the start is not shifted). For the 0A, decoded here at
+ * the start, a relative jump is computed by the original from the position at the deadline. */
 void spr_move_rel(SprWorld *w, unsigned id, int dx, int dy)
 {
 	Sprite *s = find(w, id);
 	if (s) {
 		s->x += dx;
 		s->y += dy;
+		if (s->moving && (s->mv_op == 0x05 || s->mv_op == 0x09 || (s->mv_op == 0x0A && s->mv_rel))) {
+			s->mv_tx += dx;
+			s->mv_ty += dy;
+			if (s->mv_op == 0x05) {
+				s->mv_mx += dx;
+				s->mv_my += dy;
+			}
+		}
 	}
+}
+
+/* S_085 (builtin 98) -> FUN_1000_6736 for every sprite: position, start and targets of the
+ * running 05/09 are shifted by (dx, dy). The original also scrolls the window (ScrollDC) and
+ * repaints the uncovered strips: here the whole screen is redrawn every frame. */
+void spr_scroll_all(SprWorld *w, int dx, int dy)
+{
+	for (int i = 0; i < SPR_MAX; i++) {
+		Sprite *s = &w->spr[i];
+		if (!s->used)
+			continue;
+		s->x += dx;
+		s->y += dy;
+		if (s->moving) {
+			s->mv_sx += dx;
+			s->mv_sy += dy;
+			s->mv_tx += dx;
+			s->mv_ty += dy;
+			s->mv_mx += dx;
+			s->mv_my += dy;
+		}
+	}
+}
+
+/* S_056: clip rectangle (world +0x86A..+0x870); valid only if x1 < x2 and y1 < y2, then made
+ * inclusive (x2 + 1, y2 + 1) and intersected with the screen by FUN_1000_0354. */
+void spr_set_clip(SprWorld *w, int x1, int y1, int x2, int y2)
+{
+	w->clip_on = x1 < x2 && y1 < y2;
+	w->clip[0] = x1;
+	w->clip[1] = y1;
+	w->clip[2] = x2 + 1;
+	w->clip[3] = y2 + 1;
+}
+
+/* S_053: zoom factor (+0x876) and offsets (+0x878/+0x87A = offset * zoom - 1); "zoomed" only if
+ * not (zoom 0, or zoom 1 without offset). */
+void spr_set_zoom(SprWorld *w, int zoom, int ox, int oy)
+{
+	if (zoom < 0 || zoom > 4)
+		zoom = 0;
+	int on = !(zoom == 0 || (zoom == 1 && ox == 0 && oy == 0));
+	w->zoom = on ? zoom : 0;
+	w->zoom_x = on ? ox : 0;
+	w->zoom_y = on ? oy : 0;
 }
 
 /* Hit test on a sprite image (TOPSYS01 FUN_1000_3096): inside the rectangle and,
@@ -1390,8 +1552,22 @@ static int cmp_layer(const void *a, const void *b)
 void spr_draw(SprWorld *w, Video *v)
 {
 	w->last_video = v;
-	SprFrame *bg = &w->bg[(w->rt ? w->rt->bg640 : video_width(v) < 800) ? 1 : 0]; /* Mode640/LoMem */
-	if (!bg->data)
+	SprFrame *bg = &w->bg[bg_index(w, v)];
+	int vw = video_width(v), vh = video_height(v);
+	uint8_t *fb = video_pixels(v);
+	size_t fbsize = (size_t)vw * (size_t)vh;
+	/* composition buffer of the DLL (+0x444): it survives between frames; needed when the
+	   background is not cleared (op 06 mode 2) or only the clip rectangle is repainted (op 2A) */
+	int keep = (w->bg_keep || w->clip_on) && w->comp && w->comp_w == vw && w->comp_h == vh;
+	uint8_t *prev = NULL;
+	if (keep) {
+		memcpy(fb, w->comp, fbsize);
+		if (w->clip_on && (prev = malloc(fbsize)) != NULL)
+			memcpy(prev, w->comp, fbsize);
+	}
+	if (w->bg_keep && keep)
+		; /* +0x880 = 0xFFFF: FUN_1000_3152 is skipped, the old pixels stay */
+	else if (!bg->data)
 		video_clear(v, (uint8_t)w->bg_color);
 	else {
 		if (!bg->pix)
@@ -1412,6 +1588,39 @@ void spr_draw(SprWorld *w, Video *v)
 	qsort(order, (size_t)n, sizeof(order[0]), cmp_layer);
 	for (int i = 0; i < n; i++)
 		sprite_images(w, v, order[i], draw_to_video, v);
+	if (prev) { /* S_056: outside the clip rectangle nothing is repainted */
+		int x1 = vw / 2 + w->clip[0], y1 = vh / 2 + w->clip[1], x2 = vw / 2 + w->clip[2], y2 = vh / 2 + w->clip[3];
+		for (int y = 0; y < vh; y++)
+			for (int x = 0; x < vw; x++)
+				if (x < x1 || x >= x2 || y < y1 || y >= y2)
+					fb[(size_t)y * vw + x] = prev[(size_t)y * vw + x];
+		free(prev);
+	}
+	if (w->bg_keep || w->clip_on) {
+		if (!w->comp || w->comp_w != vw || w->comp_h != vh) {
+			free(w->comp);
+			w->comp = malloc(fbsize);
+			w->comp_w = vw;
+			w->comp_h = vh;
+		}
+		if (w->comp)
+			memcpy(w->comp, fb, fbsize);
+	}
+	if (w->zoom > 0) { /* S_053 -> FUN_1000_3926: StretchDIBits, dest = zoom * pos - (offset * zoom - 1) */
+		uint8_t *src = malloc(fbsize);
+		if (src) {
+			memcpy(src, fb, fbsize);
+			int z = w->zoom, ox = w->zoom_x * z - 1, oy = w->zoom_y * z - 1;
+			for (int y = 0; y < vh; y++) {
+				int sy = y + oy >= 0 ? (y + oy) / z : -1;
+				for (int x = 0; x < vw; x++) {
+					int sx = x + ox >= 0 ? (x + ox) / z : -1;
+					fb[(size_t)y * vw + x] = sx >= 0 && sx < vw && sy >= 0 && sy < vh ? src[(size_t)sy * vw + sx] : 0;
+				}
+			}
+			free(src);
+		}
+	}
 }
 
 /* ---------------------------------------------------------------- builtin 7D */

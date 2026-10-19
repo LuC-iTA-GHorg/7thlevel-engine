@@ -16,6 +16,7 @@ struct Video {
 	uint32_t *rgb;        /* w*h, conversion buffer */
 	int fullscreen;
 	int fade;             /* 0..256: brightness of the game colors (indices 10..245) */
+	int ox, oy;           /* image offset at presentation (builtin 78, window shake) */
 	SDL_Cursor *cursors[10]; /* modes 2, 3, 5..9 of opcode 1F: resources 0x3E9..0x3EF of TOPSY.EXE */
 	int cursor_mode;
 };
@@ -189,8 +190,15 @@ void video_present(Video *v)
 	}
 	SDL_SetRenderDrawColor(v->ren, 0, 0, 0, 255);
 	SDL_RenderClear(v->ren);
-	SDL_RenderCopy(v->ren, v->tex, NULL, NULL);
+	SDL_Rect dst = { v->ox, v->oy, v->w, v->h };
+	SDL_RenderCopy(v->ren, v->tex, NULL, &dst);
 	SDL_RenderPresent(v->ren);
+}
+
+void video_set_offset(Video *v, int dx, int dy)
+{
+	v->ox = dx;
+	v->oy = dy;
 }
 
 void video_warp_mouse(Video *v, int x, int y)

@@ -61,6 +61,11 @@ typedef struct {
 typedef struct {
 	uint16_t click, click_arg, drag, drop;
 	uint8_t click_off, draggable, loaded;
+	/* in-memory record of FUN_1008_73DC for every entry: res_ld = loaded (pointer != 0, the
+	   "is loaded" of FUN_1008_74FA), res_ref = word +4 (sprites holding a bitmap/cel/movie/text
+	   member; FUN_1008_722A frees those only at 0). Cleared at every library open (72B0). */
+	uint8_t res_ld;
+	uint16_t res_ref;
 } RtObj;
 
 struct Rt {
@@ -216,7 +221,11 @@ struct Rt {
 	} zones[40];
 	int n_zones;
 	int zone_cur;              /* DAT_1538: zone under the cursor + 1, 0 = none */
-	RtObj *obj;                /* per index entry (type 17 only) */
+	RtObj *obj;                /* per index entry (input fields: type 17 only) */
+	/* palette: pal_base = DS:10E8 (library palette, op 60 replaces 10..245), pal = current
+	   (op 61); pal_dirty = the frame must apply pal */
+	uint8_t pal_base[256][3], pal[256][3];
+	int pal_dirty;
 	uint32_t n_obj;
 	uint16_t hover_script;     /* DAT_1542 (builtin 6F): script for entering/leaving sprites */
 	uint16_t hover_sprite;     /* DAT_1544: sprite under the cursor (encoded) */
@@ -226,13 +235,24 @@ struct Rt {
 	/* ---- player controllers (TOPSY 1008:4DE8..5DFC, OPCODE_SCRIPT.md "Controller"):
 	   two 0x201-byte records at DS:44EA; only the fields used by the games here */
 	struct RtPad {
+		uint16_t hist;         /* +0: code history, h = h * 16 + code (FUN_1008_4DE8) */
 		uint8_t dir;           /* +2: current direction (0 = idle, 3..0x0C) */
 		uint8_t buttons;       /* +4: buttons pressed (1, 2, 4, 8) */
 		uint16_t script;       /* +6: event script (opcode 54, encoded constant) */
+		uint16_t n_seq, n_combo; /* +8 / +0xA: entries of the two tables below */
+		/* 9-byte entries {key, script, pattern, mask, enabled} (raw operand words):
+		   +0xC opcode 52 table (50 entries), +0x1CE opcode 56 table (4 entries) */
+		struct RtPadEntry { uint16_t key, script, pattern, mask; uint8_t enabled; } seq[50], combo[4];
+		struct RtPadEntry pending; /* +0x1F2: combo held back by the latch (opcode 55) */
 		uint8_t type;          /* +0x1FB: 0 none, 1 joystick, 2 keyboard, 5 mouse */
+		uint8_t mirror;        /* +0x1FC: opcode 57, direction codes through DS:0022 */
+		uint8_t latch;         /* +0x1FD: opcode 55 */
 		uint8_t src;           /* +0x1FF: source (1/2 key sets, 3/4 joystick, 5 mouse) */
 		uint8_t active;        /* +0x200 */
+		uint8_t hist_on;       /* timer FUN_1008_4C9E armed (id = player + 2) */
+		uint32_t hist_due;
 	} pad[2];
+	uint16_t pad_timeout;      /* DAT_4929: [Input] Timeout of 7THLEVEL.INI (default 200 ms) */
 	uint8_t pad_map[8];        /* DS:48FD: source -> player */
 	uint8_t keyset[2][16];     /* DS:0042: {key, code} pairs of the two sets (builtin 6B) */
 	struct { uint8_t set, ready, code; } padkey[256]; /* DS:40EA: key -> set and code */
@@ -246,6 +266,14 @@ struct Rt {
 	int joy_n;                 /* DAT_40D4 -> G(5016): joysticks found (0..2), set by the caller */
 	uint8_t joy_ready[34];     /* DS:4905: zone ready to send its event (17 per joystick) */
 	uint8_t joy_prev[2];       /* DS:4927: last direction zone of each joystick */
+	/* builtins 8E / 91 / 97 / 9A: scripts as encoded constants (0 = none) and DAT_5B92 */
+	uint16_t v150a;            /* DAT_150A: called with 1/0 when the window (de)activates */
+	uint16_t v1546;            /* DAT_1546: rectangle-selection script (x1, y1, x2, y2) */
+	uint8_t v5b92;             /* DAT_5B92: Ctrl+Shift capture mode of the original (stored only) */
+	uint8_t sel_on;            /* DAT_5B97: rectangle selection in progress */
+	int16_t sel[4];            /* DS:07EC..07F2: x1, y1, x2, y2 of the selection */
+	/* builtin 78 (S_075): window shake; provided by whoever owns the window, NULL = nothing */
+	void (*shake)(struct Rt *rt, int dx, int dy);
 	/* sprite world (SprWorld of sprite.c), created by whoever uses the runtime; NULL = no graphics */
 	void *spr;
 	/* diagnostics */
@@ -290,6 +318,7 @@ unsigned rt_list_len(const Rt *rt, unsigned id);
 /* ---- instructions with known semantics */
 int rt_load(Rt *rt, unsigned id);     /* 0x02 */
 int rt_unload(Rt *rt, unsigned id);   /* 0x03 */
+int rt_is_loaded(Rt *rt, unsigned id); /* FUN_1008_74FA (opcode 20, 1A, ...) */
 int rt_show(Rt *rt, unsigned sprite, unsigned anim, int hide_first); /* 0x05 */
 void rt_link(Rt *rt, const char *file, int stop_audio, int ret); /* 0x12 */
 void rt_quit(Rt *rt);                 /* 0x0D */
@@ -366,5 +395,12 @@ int16_t *rt_int2ptr(Rt *rt, int16_t v);
 
 /* Value of an encoded operand (only for rt_op handlers). */
 int16_t rt_operand(Rt *rt, int16_t *l, uint16_t enc);
+
+/* Expression operators / and % (Script_EvalExpr 0x15/0x16, 1008:2551): a zero divisor is the
+ * runtime error 0x6F (rt_error) and the result is 0. */
+int16_t rt_div(Rt *rt, int a, int b);
+int16_t rt_mod(Rt *rt, int a, int b);
+/* Runtime error (FUN_1010_2682): message, every script stops (DAT_1548 = code), the game closes. */
+void rt_error(Rt *rt, unsigned code);
 
 #endif
