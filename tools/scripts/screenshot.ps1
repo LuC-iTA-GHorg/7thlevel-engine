@@ -13,7 +13,7 @@ param(
 # PowerShell 5.1: $PSScriptRoot is not available in parameter defaults
 . (Join-Path $PSScriptRoot 'game.ps1')
 if (-not $Exe) {
-	$r0 = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+	$r0 = Get-GameRoot
 	$Exe = Join-Path $r0 "build\$((Get-Game $r0).NAME).exe"
 }
 Add-Type -AssemblyName System.Drawing

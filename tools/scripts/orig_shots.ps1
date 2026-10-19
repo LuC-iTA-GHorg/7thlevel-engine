@@ -12,8 +12,8 @@ param(
 	[switch] $Keep,
 	[switch] $Attach
 )
-$root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 . (Join-Path $PSScriptRoot 'game.ps1')
+$root = Get-GameRoot
 if (-not $Exe) { $Exe = Join-Path $root (Get-Game $root).EXE }
 $otvdm = Get-ChildItem (Join-Path $root 'tools\otvdm') -Recurse -Filter otvdmw.exe | Select-Object -First 1
 if (-not $otvdm) { throw 'OTVDM not found in tools\otvdm' }

@@ -11,8 +11,8 @@ param(
 	[string[]] $Only = @(),
 	[string] $Exe = ''
 )
-$root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 . (Join-Path $PSScriptRoot 'game.ps1')
+$root = Get-GameRoot
 if (-not $Exe) { $Exe = Join-Path $root "build\$((Get-Game $root).NAME).exe" }
 $evdir = Join-Path $root 'tools\eventi'
 $outroot = Join-Path $root 'build\prove'

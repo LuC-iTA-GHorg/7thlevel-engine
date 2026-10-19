@@ -16,8 +16,8 @@ param(
 	[switch] $SkipOrig,
 	[switch] $SkipPort
 )
-$root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 . (Join-Path $PSScriptRoot 'game.ps1')
+$root = Get-GameRoot
 $portexe = Join-Path $root "build\$((Get-Game $root).NAME).exe"
 $evfile = Join-Path $root "tools\eventi\$Scene.txt"
 if (-not (Test-Path $evfile)) { throw "test does not exist: $evfile" }
