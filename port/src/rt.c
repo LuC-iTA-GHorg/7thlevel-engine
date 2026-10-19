@@ -2402,7 +2402,27 @@ int rt_op(Rt *rt, int16_t *l, const uint8_t *bytes)
 	}
 	case 0x36: /* text field (1010:22A0) */
 		return text_field(rt, l, bytes);
-	case 0x32: /* exit point of a ray from a rectangle (1008:7DF6) */
+	case 0x20: { /* {resource, script}: if the resource is loaded (FUN_1008_74FA), calls the script
+		with no arguments (FUN_1008_D6D6) or, with script 0, ends the current script like op 2C;
+		otherwise does nothing. Used by the Jungle games (JUNGPRTY.BIN, sprite 416 -> script 415) */
+		unsigned res = (uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 2));
+		unsigned type = lb7_entry(&rt->lib, res).type;
+		int loaded = 0;
+		if (type == 17)
+			loaded = rt->spr && spr_loaded(rt->spr, res);
+		else
+			tr(rt, "   ?? op 20: loaded check for type %u not ported\n", type);
+		tr(rt, "   resource %u loaded: %d\n", res, loaded);
+		if (!loaded)
+			return 1;
+		uint16_t s = lb7_rd16(bytes + 4);
+		if (!s)
+			return 0;
+		/* FUN_1008_CB06 runs it without moving the locals pointer (DAT_10C2): same frame */
+		(void)rt_call(rt, (uint16_t)rt_operand(rt, l, s), l, 0, NULL);
+		return 1;
+	}
+	case 0x32: /*exit point of a ray from a rectangle (1008:7DF6) */
 		op_ray(rt, l, bytes);
 		return 1;
 	case 0x3E: /* intersection of two lines (1008:7B1C -> GETINTERSECT) */

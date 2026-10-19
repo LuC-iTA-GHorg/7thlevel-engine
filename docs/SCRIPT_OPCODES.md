@@ -109,7 +109,7 @@ Lengths in bytes (L). "var" = length held in a word of the instruction.
 | 1D | 4 | | inline | certain | sets `DAT_1508`: script run when the window becomes active again (FUN_1008_E896, only with `AltTab=0`); in the games it is script 18 (resumes the pause, restarts the music with the script of `G(8)`); ported |
 | 1E | 8 | | 1010:25B8 | certain | **deferred call** `{script, arg1, arg2}` (in the decompiled C of FUN_1010_25B8 the order is `(arg2, arg1, script)`): queue of 40 records at DS:5893 run by the main loop (1008:4288 -> 1008:CDAC); ported (`rt->evq`). It does NOT play a wave (an earlier hypothesis was wrong) |
 | 1F | 4 | `cursor` | 1010:23E6 | certain | cursor mode (+2 byte, DAT_1514) |
-| 20 | 6 | | inline | certain | if the resource is active → runs the script in +4 |
+| 20 | 6 | | 1008:D0xx case 0x20 | certain | `{resource, script}`: if the resource is loaded (FUN_1008_74FA) runs the script with no arguments in the **same locals frame** (FUN_1008_D6D6 → CB06), or with script 0 ends the current script; otherwise nothing. Used by the Jungle games (JUNGPRTY.BIN); ported (loaded check for type 17 sprites, the only type used) |
 | 21 | 18 | `hit` | 1008:91A2 | certain | **collision** between two sprites `{A, B, script, arg1, arg2, repeat (byte), clear all (byte), A also hidden, B also hidden, mode}`: ordered pair (list at DS:5707, 14-byte records, FUN_1008_3E62); at every tick FUN_1008_4124 does the pixel test (S_048) and queues the script; without "repeat" the pair is removed; script 0 = removes the pair; ported |
 | 22 | 10 | `runindex` | 1008:A5BE | certain | runs `list[var]`, fallback options and auto-increment |
 | 23 | 4 | | inline | certain | sets `DAT_150E`: script of the Pause key (FUN_1008_3140), receives 1 = pause / 0 = resume; a returned value ≠ 0 (opcode 59) cancels the pause; without a script the pause only stops wave and music (A_042); while paused (`DAT_5B85`) the engine does no work and accepts only the Pause key; ported |
@@ -455,7 +455,7 @@ returns 0. None is used by Upsy and Outwords. Descriptions are inferred from the
 | 78 | 2 | `S_075` (TOPSYS01); pinball |
 | 7A, 7B | 4 | like 79 (base-10000 number in two words): 7A multiplies (CRT 1018:05EE), 7B divides (1018:0554); inferred, pinball (7B: 12 uses) |
 | 7C | 8 | `COLLIDE` (TOPSYU01); pinball: 8 uses |
-| 7D | 3-4 | FUN_1008_708A: two bitmaps (types 1 or 18) and rectangles, numeric result; to be analyzed |
+| 7D | 2-4 | `{destination bitmap, source bitmap [, x, y]}`: FUN_1008_708A copies the source (type 1 or 18) into the loaded destination type 1 bitmap at offset (x, y), clipped to the destination, through FUN_1000_2890 of the sprite DLL (S_019); returns 1 if something was copied. Used once by Le Food Feud (TOPSFOOD.BIN); **not ported yet** |
 | 7E, 7F | 4, 2 | `DISTANCE`, `REFLECTANGLE` |
 | 83, 84 | 1, 2 | `S_077(sprite)` (value), `S_078(sprite, …)`; pinball (84: 19 uses) |
 | 85 | 1 | `GETQUADRANT` |
