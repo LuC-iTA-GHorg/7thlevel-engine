@@ -201,7 +201,9 @@ static char *expr_c(const Ctx *c, const uint8_t *e, size_t avail)
 			if (t < 0x22 && binop[t]) {
 				Sym b = POP(), a = POP();
 				int ar = t >= 0x12 && t <= 0x14; /* 16-bit arithmetic like the original */
-				if (ar && (a.addr || b.addr))
+				if (t == 0x15 || t == 0x16) /* zero divisor: runtime error 0x6F (1008:2866) */
+					s[sp++] = mk(fmt("rt_%s(rt, %s, %s)", t == 0x15 ? "div" : "mod", val(a), val(b)), 0);
+				else if (ar && (a.addr || b.addr))
 					s[sp++] = mk(fmt("/* arithmetic on an address */ (%s %s %s)", val(a), binop[t], val(b)), 0);
 				else if (ar)
 					s[sp++] = mk(fmt("(int16_t)(%s %s %s)", val(a), binop[t], val(b)), 0);
