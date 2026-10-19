@@ -37,6 +37,9 @@ void video_blit_flip(Video *v, const uint8_t *pix, const Lb7Bitmap *b, int x, in
 void video_set_title(Video *v, const char *title);
 void video_toggle_fullscreen(Video *v);
 void video_present(Video *v);
+/* Offset of the image on the logical screen at the next presentations (window shake, builtin
+ * 78); the uncovered strip stays black. */
+void video_set_offset(Video *v, int dx, int dy);
 /* Palette fade: 0 = black, 256 = full colors; acts on indices 10..245 at presentation. */
 void video_set_fade(Video *v, int level);
 /* Moves the cursor to point (x, y) of the logical screen (the original's SetCursorPos). */

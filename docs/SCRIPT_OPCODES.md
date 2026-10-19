@@ -90,7 +90,7 @@ Lengths in bytes (L). "var" = length held in a word of the instruction.
 | 09 | 4 | | 1008:8E92 | probable | A_027 (audio); not used by Upsy |
 | 0A, 0B | 4 | `fadein`, `fadeout` | 1008:4880 | certain | palette fade, +2 speed 1..100 (0 or >100 = 100) = number of steps, one per redrawn frame, **synchronous** (FUN_1008_466C/478C → 4622 → S_021, colors 10..245); fade in acts only with the screen off (`DAT_5B6D`, off at startup), fade out only when on; a `fadeout` during the startup script does not fade but cancels the automatic fade in (DAT_5B75); on library change fade out 100, after the startup script fade in 100. Ported (`rt_fade`, `rt->frame`) |
 | 0C | 12 | `key` | 1008:345C | certain | **key → script** `{key, script, Ctrl, Shift, enable, disable, release}`: `+2` Windows virtual key code (0 = all), `+4` script, `+6` with Ctrl, `+7` with Shift, `+8` re-enable, `+9` disable, `+10` on release; ported |
-| 0D | 2 | `quit` | inline | certain | `WM_CLOSE`, or launches another program if string 0x77 is set |
+| 0D | 2 | `quit` | inline | certain | with the string DS:5BD8 (opcode 77) empty: `WM_CLOSE`; otherwise a link record `{0x12, name = DS:5BD8, stop audio = 1, go back = 0}` is run through FUN_1008_9224 = **chain to that library** instead of quitting; the script continues. Ported (`rt_quit` → `rt_link`) |
 | 0E | 4 | | 1008:AA96 | probable | A_037 (audio); not used by Upsy |
 | 0F | 8 | `wavestop` | 1008:AAAA | certain | **stops** wave `+2` (0 = all), `+4` fade in ms (always 0 in Upsy); no notification; ported |
 | 10 | 24 | `calc` | 1008:9E06 | certain | **arithmetic** `{variable, n, n ≤ 3 × {operand, operation (byte), negate (byte)}}`: in order `var = var op x` (FUN_1008_8D2C) with 0 assigns, 1 +, 2 −, 3 ×, 4 rounded division, 5 \|, 6 &, 7 %; ported |
@@ -104,7 +104,7 @@ Lengths in bytes (L). "var" = length held in a word of the instruction.
 | 18 | 12 | `replace` | 1008:E740 | certain | **sprite replacement** `{old, new, animation, script, unload the old (byte), hide first (byte)}`: if the old one is loaded, the new one takes its place in the draw list (S_044), inherits images and position if it has none (FUN_1008_E4F4, S_045), otherwise the old one is hidden; then `show` of the new one and the script right away on the current frame (D754). 311 uses (poses of the menu characters); ported |
 | 19 | 6 | | 1008:8FBE | certain | `{sprite, byte}` = field +0x65 (S_004 = 1000:6B82): the `06` loops of the animation end; ported (`spr_break_loops`) |
 | 1A | 6 | | 1008:CED0 case 0x1A | certain | `{sprite, animation}`: if the sprite is loaded (`73DC(id).+4` = DLL handle) → FUN_1008_A990(0, anim, sprite) = show without hiding. **Quirk**: the handler decodes both operands and A990 decodes them again (it expects encoded operands like op 05), so an id below 0x159F is read as the index of a variable/local and a larger one becomes `id + 0x7531`; ported as is (`rt_op`). Not in the translated logic of the 9 games |
-| 1B | 6 | `debug` | 1008:91B8 | certain | debug print (`_DEBUGSTR`) if enabled |
+| 1B | 6 | `debug` | 1008:91B8 | certain | `{value, format}`: `wvsprintf` + `OutputDebugString` only with `Debug=1`; ported as a trace line (`rt_debug`) |
 | 1C | 6 | | 1008:9A20 | certain | `{sprite, level}`: draw level, ordered unsigned reinsertion (S_065); ported (`spr_set_layer`) |
 | 1D | 4 | | inline | certain | sets `DAT_1508`: script run when the window becomes active again (FUN_1008_E896, only with `AltTab=0`); in the games it is script 18 (resumes the pause, restarts the music with the script of `G(8)`); ported |
 | 1E | 8 | | 1010:25B8 | certain | **deferred call** `{script, arg1, arg2}` (in the decompiled C of FUN_1010_25B8 the order is `(arg2, arg1, script)`): queue of 40 records at DS:5893 run by the main loop (1008:4288 -> 1008:CDAC); ported (`rt->evq`). It does NOT play a wave (an earlier hypothesis was wrong) |
@@ -125,25 +125,25 @@ Lengths in bytes (L). "var" = length held in a word of the instruction.
 | 2D | 2 | `nop` | inline | certain | |
 | 2E | 8 | `random` | 1008:9C8C | certain | `{var, min, max}`: random between min and max, without repeating the previous result (`DAT_0CFA`); ported |
 | 2F | 6 | `keystate` | 1008:9996 | certain | `{variable, key}`: variable = 1 if the key (virtual key < 256) is pressed (`GetKeyState`); ported |
-| 30 | 10 | | 1008:952E | ? | |
-| 31 | 12 | | 1008:79F0 | probable | angle between points (`GETANGLE`) |
-| 32 | 20 | | 1008:7DF6 | probable | movement along an angle (`TANGENT`, `NORMALIZEANGLE`) |
-| 34 | 8 | | 1008:9FAA | probable | file/configuration (MMIO, `WRITEPROFILESTRING`, `RESEXTRACTFILE`) |
+| 30 | 10 | `getdate` | 1008:952E | certain | `{var weekday, var month, var day, var year}` (INT 21h AH=2Ah): weekday 0 = Sunday, month 1..12, day 1..31, full year; each destination written only if its operand word ≠ 0 (variables only). Ported (`localtime`) |
+| 31 | 12 | `angle` | 1008:79F0 | certain | `{dest, x0, y0, x1, y1}`: dest = `GETANGLE(x1 − x0, y1 − y0)`, like builtin 31. Ported |
+| 32 | 20 | `ray` | 1008:7DF6 | certain | exit point of a ray from a rectangle (`TANGENT`, `NORMALIZEANGLE`); ported (`op_ray`) |
+| 34 | 8 | `wallpaper` | 1008:9FAA | certain | "7th Level Living Wall Paper" `{resource (type 3 file or type 1 bitmap), file name, tile (byte)}`: writes `<WindowsDir>\name` and makes it the Windows desktop wallpaper (`[Desktop]` of WIN.INI, `SPI_SETDESKWALLPAPER`). **Deliberately a no-op with a trace line**: a port must not change the user's desktop (see "Win16-only features") |
 | 35 | 4 | `mute` | A_023 | certain | **global mute** `{signed byte}`: < 0 toggles, 0 off, > 0 on; zeroes the volume of wave, MIDI and CD without stopping the sounds, applies to all libraries (`*` key of the keypad, scripts 11/12); ported |
 | 36 | 12 | `textfield` | 1010:22A0 | certain | **text field** `{type-18 text, string (raw id), final script, -, max (byte, 0 = 127), digits only (byte)}`; text 0 = closes the active field. See "Input"; ported |
 | 37 | 12 | `getrect` | 1008:92E4 | certain | `{sprite, left, top, right, bottom}`: rectangle of the current image (S_060, fields +8..+0xE); ported |
 | 38 | 32 | `sprintf` | 1008:A1B8 | certain | +2 destination string (string variables only), +4 format, +6 number of arguments, +8 up to 6 arguments of 4 bytes {word, byte: 0 = string id, ≠0 = operand}; `wvsprintf`, result truncated to 127 characters |
-| 39, 3A | 8 | `strcmp`, `strcmpi` | 1008:A52A | certain | |
-| 3B, 3C | 10 | `iniread`, `iniwrite` | 1008:B11E | certain | file `7THLEVEL.INI`; +2 variable (integer) or string id, +4 key, +6 section (string id; 0 = title of the library `DAT_5BF8` if not empty, otherwise DS:5B98 = string 0xD2 of TOPSY.EXE (the default INI section name `Topsy Turvy`), loaded by `LoadString` in FUN_1000_05E4), +8 encryption (byte + first character of the key, in two nibbles '0'+n), +9 0 = integer / 1 = string (escapes `\n \r \t \" \\`). Real example: `[Topsy Turvy Games] FreeSpace` |
-| 3D | 22 | `hover` | 1008:4252 | certain | cursor pass-over areas `{x1, y1, x2, y2, enter script, arg, exit script, arg, sprite}`, flag `+0x14` = clear all; max 40 (DS:492B). Not used by Upsy: not ported |
-| 3E | 22 | | 1008:7B1C | probable | intersection (`GETINTERSECT`) |
+| 39, 3A | 8 | `strcmp`, `strcmpi` | 1008:A52A | certain | `{var, string, string}`: −1/0/1, variable unchanged if a string is missing; ported |
+| 3B, 3C | 10 | `iniread`, `iniwrite` | 1008:B11E | certain | file `7THLEVEL.INI`; +2 variable (integer) or string id, +4 key, +6 section (string id; 0 = title of the library `DAT_5BF8` if not empty, otherwise DS:5B98 = string 0xD2 of TOPSY.EXE (the default INI section name `Topsy Turvy`), loaded by `LoadString` in FUN_1000_05E4), +8 encryption (byte + first character of the key, in two nibbles '0'+n), +9 0 = integer / 1 = string (escapes `\n \r \t \" \\`; reading, FUN_1008_AC00 of TOPSY.EXE: the character after `\` is lowercased first, so `\N` is a newline and an unknown `\X` gives `x`, and a final lone `\` ends the string and is dropped; the Jungle EXE keeps strings raw). Real example: `[Topsy Turvy Games] FreeSpace` |
+| 3D | 22 | `hover` | 1008:4252 | certain | cursor pass-over areas `{x1, y1, x2, y2, enter script, arg, exit script, arg, sprite}`, flag `+0x14` = clear all; max 40 (DS:492B); ported (`op_zone`) |
+| 3E | 22 | `intersect` | 1008:7B1C | certain | intersection of two lines (`GETINTERSECT`); ported |
 | 3F | 8 | | 1008:A0C0 | certain | **moves the sprite** `{sprite, x, y}` absolute (S_038 -> FUN_1000_383C); first **loads** it if absent (FUN_1008_740E(0x11) → 6C08; without this, the stopwatch of the first round of Upsy Daisy stayed in the center); ported (`spr_move`) |
 | 40 | 4 | `mousefilter` | inline | certain | sets `DAT_1504` = **mouse filter** script (section "Input") |
-| 41, 42 | 6 | `cos`, `sin` | 1008:7D70 | probable | |
-| 43 | 4 | `iniwrite?` | 1008:B0C0 | probable | `WRITEPRIVATEPROFILESTRING` |
+| 41, 42 | 6 | `cos`, `sin` | 1008:7D70 | certain | `{dest, angle}`: dest = `COSINE` / `SINE` (10000 · cos/sin, tenths of a degree); ported |
+| 43 | 4 | `inidelsection` | 1008:B0C0 | certain | `WritePrivateProfileString(section, NULL, NULL)`: deletes a section of 7THLEVEL.INI (0 = default section); ported |
 | 44 | 6 | `visible` | 1008:A7B4 | certain | `{variable, sprite}`: variable = sprite visible (S_063); ported |
-| 45 | 2 | | 1008:B20A | probable | save/load to file (MMIO) |
-| 46 | 10 | | 1008:96FC | ? | |
+| 45 | 2 | `inibackup` | 1008:B20A | certain | copies `<WindowsDir>\7THLEVEL.INI` to the first free `7thlevel.001..999` (`"7thlevel.%03i"`, FUN_1008_AE40; `.999` if all exist) in 1 KB blocks (FUN_1008_AB1C). Ported: same naming, in the folder of the port's INI |
+| 46 | 10 | `gettime` | 1008:96FC | certain | `{var hour, var minute, var second, var hundredths}` (INT 21h AH=2Ch), same writing rule as 30. Ported |
 | 47 | 6 | | 1008:9122 | certain | `{sprite (0 = all), byte}`: stamps the sprite onto the background (FUN_1000_0426: only with a background **bitmap** (+0x448) and the sprite visible); byte 0 = then removes it (S_025 + S_010); ported (`spr_stamp`) |
 | 48 | 6 | `settable` | inline | certain | `table_4090[+2] = +4` |
 | 49 | 6 | `setmouse` | inline | certain | `SETCURSORPOS` |
@@ -154,11 +154,17 @@ Lengths in bytes (L). "var" = length held in a word of the instruction.
 | 4F | var (+4) | `while` | 1008:A846 | certain | like `if`: +2 exit, +4 start of the body (= length); the body ends with a `goto` to the condition |
 | 50 | 10 | `midi` | 1008:9BBE | certain | **plays a MIDI** `{MIDI, repetitions, notify (byte +6), script +8}`: one music at a time (the previous one stops without notification); ported |
 | 51 | 4 | `midistop` | 1008:A4C4 | certain | stops MIDI `+2` (0 = the current one), without notification; ported |
-| 52..58 | 6..16 | | 1008:4F0A..5558 | certain | **player controllers** (section "Player controllers"): **53** selects/turns on/suspends the device of a player and **54** sets the events script (ported); 52/55 key sequences and the others not used by the games |
+| 52 | 16 | `keyseq` | 1008:4FCE | certain | edits the 50-entry table of the player record (+0xC); operands as 56. Ported (section "Player controllers") |
+| 53 | 12 | `padsel` | 1008:535C | certain | selects/turns on/suspends the device of a player; ported |
+| 54 | 6 | `padscript` | 1008:5558 | certain | `{player, script}`: events script; ported |
+| 55 | 8 | `padlatch` | 1008:5190 | certain | `{player, latch, fire}`: latch flag; with latch 0 and fire ≠ 0 a pending combination is queued; ported |
+| 56 | 16 | `padcombo` | 1008:4F0A | certain | edits the 4-entry combination table (+0x1CE) matched against the history; ported |
+| 57 | 6 | `padmirror` | 1008:52D0 | certain | `{player, flag}`: mirrored direction codes (table DS:0022); ported |
+| 58 | 10 | `padstate` | 1008:5092 | certain | `{player, var direction, var buttons, var pending}`; ported |
 | 59 | var | `return` | `Script_EvalExpr` | certain | return value, end of the script |
 | 5C | 14 | | 1008:9EAC | probable | MIDI messages (A_032) |
 | 5D | 4 | `volume` | 1008:A32A | certain | device volume one step up (`+2` ≠ 0) or down: `+3` 0 all, 1 wave, 2 MIDI, 3 auxiliary (CD); 32 levels (`>> 11` of the Windows volume, FUN_1008_8CBE); ported |
-| 5E | 6 | | 1010:1F58 | probable | `{type-18 text, word}`: changes the text color (record+4) and redraws; not used by the present games, not ported |
+| 5E | 6 | `textcolor` | 1010:1F58 | probable | `{type-18 text, word}`: stores the raw word in the runtime text record (word 2, +4: the colour, an encoded operand) and redraws (1010:1DE8); not used by the present games. **Not ported**: the text colour lives in the sprite engine (`sprite.c`), which has no setter yet |
 | 60 | 4 | `setpalette` | 1008:0770 | certain | `{palette resource (type 14)}`: loads it (740E(0xE)), copies 0x3B0 bytes = 236 × {R, G, B, flag} into the base palette DS:1110 (= DS:10E8 + 10·4) and applies them to colours 10..245 (S_005); ported (`rt->pal_base`/`rt->pal`, applied by the frame) |
 | 61 | 12 | `palfill` | 1008:067C | certain | `{first, count, restore byte, R G B flag}`: in palette mode only (always in the port): `first` (> 9, else nothing), `count` (≤ 0xEC) entries set to the colour at +8, or with the byte ≠ 0 restored from the base palette DS:10E8; applied at once (ANIMATEPALETTE); ported |
 | 6A | 4 | | inline | certain | enables the debug hook (`DAT_40DC`) |
@@ -167,7 +173,16 @@ Lengths in bytes (L). "var" = length held in a word of the instruction.
 | 8D | 6 | | inline | certain | sets `DAT_40DE` |
 | 8F | 6 | `nop6` | inline | certain | |
 
-Opcodes without a handler (`default`) → runtime error 0x73.
+Opcodes without a handler (`default`: 00, 33, 4A, 5A, 5B, 5F, 62-69, 6B-70, 72-76, 78-8C, 8E,
+90-FF) → runtime error 0x73. Ported: `rt_op` calls `rt_error(0x73)` and the script ends.
+
+**Runtime errors** (FUN_1010_2682): message box with the string of the error code, `DAT_1548` =
+code (every script stops), then `WM_CLOSE`. The port (`rt_error`) writes the message to stderr
+and the trace, sets `rt->stop` and asks the main loop to quit. Besides 0x73, the expression
+operators `/` and `%` with a zero divisor give error **0x6F** (`Script_EvalExpr`, 1008:2866):
+`scr2c` translates them to `rt_div` / `rt_mod` (before, generated C divided directly, which is
+undefined behaviour and crashes on x86). Game logic generated before this change still uses
+the plain C operators until it is regenerated.
 
 ### State in the port
 
@@ -177,38 +192,50 @@ in `port\src\rt.c`):
 - **translated to inline C by `scr2c`**: 01 02 03 05 0A 0B 0D 11 12 14 15 16 17 1B 1D 1F 22 23 25
   26 2B 2C 2D 38 3B 3C 40 48 49 4C 4D 4E 4F 59 6A 71 77 8D 8F (flow control, calls,
   expressions, engine variables, INI, cursor, fade, timers);
-- **handled by `rt_op`** (30 opcodes): 04 06 07 08 0C 0F 10 13 18 19 1C 1E 21 24 28 29 2E 2F 35
-  36 37 3F 44 47 4B 50 51 53 54 5D;
-- **not ported**: all the others. `scr2c` emits them anyway as a call to `rt_op`; the final branch
-  of `rt_op` increments `unimpl_op[op]`, writes `?? op XX not yet ported` into the
-  trace and **continues**: the instruction is silently ignored (hence the idea of making the
-  tests fail whenever a `??` appears).
+- **handled by `rt_op`**: 04 06 07 08 0C 0F 10 13 18 19 1C 1E 20 21 24 28 29 2E 2F 30 31 32 34
+  35 36 37 39 3A 3D 3E 3F 41 42 43 44 45 46 47 4B 50 51 52 53 54 55 56 57 58 5D;
+- **not ported yet**: the other opcodes of the original. `scr2c` emits them anyway as a call to
+  `rt_op`; the final branch of `rt_op` increments `unimpl_op[op]`, writes `?? op XX not yet
+  ported` into the trace and **continues**. A word that is not an opcode of the original at all
+  gives runtime error 0x73 (see above).
 
-**Opcodes not ported** (they exist in the original; none is used by Upsy Daisy and Inside Outwords):
+**Opcodes not ported yet** (they exist in the original; none is used by the present games):
 
 | Opcode | Mnemonic / meaning | Notes |
 |---|---|---|
-| 09, 0E | audio A_027 / A_037 | not used |
-| 1A | like 05 (without hiding) if the sprite is loaded; operands decoded twice (quirk) | |
-| 20 | if the resource is loaded (any type, FUN_1008_74FA), runs script +4 | Jungle games |
-| 27 | display zoom (S_053) | |
-| 2A | clip rectangle (S_056) | |
-| 30, 46 | to be analyzed (1008:952E, 1008:96FC) | |
-| 31 | angle between points (`GETANGLE`) | |
-| 32 | movement along an angle | pinball |
-| 34, 45 | file/configuration, MMIO save | |
-| 39, 3A | `strcmp`, `strcmpi` as instructions (builtins 39/3A are ported) | |
-| 3D | `hover`: cursor pass-over areas | |
-| 3E | intersection (`GETINTERSECT`) | pinball |
-| 41, 42 | `cos`, `sin` | |
-| 43 | `WRITEPRIVATEPROFILESTRING` | pinball |
-| 52, 55, 56, 57, 58 | controller: key sequences, mirror, state reading (53 and 54 are ported) | |
-| 5C | MIDI messages (A_032) | |
-| 5E | text color (type 18) | |
-| 60, 61 | palette from a type 14 resource / fill or restore a range (S_005 → `ANIMATEPALETTE`) | |
+| 09, 0E | CD audio A_027 / A_037 | audio |
+| 5C | MIDI channel mute / tempo (A_032) | audio |
+| 5E | text colour (type 18) | needs a setter in `sprite.c` |
 
-The Dual Bowling game needs only opcodes that are already ported; the pinball game needs 20, 32,
-3E, 43 and probably 31, 41, 42.
+Partial: 06 (no transitions, modes 2/other), 08/0F (no fades/delay), 20 (loaded check only for
+type 17), 5D (no CD device), 38 (`%l` arguments stay 16 bit), 12 (the go-back case "previous ==
+current library closes the window" of FUN_1008_9224 is not modelled).
+
+### Win16-only features: design choices
+
+Some instructions and builtins drive Windows 3.1 itself rather than the game. The port keeps the
+script-visible result of the original but never touches the user's system:
+
+- **opcode 34** (Living Wall Paper, desktop wallpaper): no-op with a trace line; the result is
+  the same as a failed `RESEXTRACTFILE` (nothing happens, no return value);
+- **builtin 96** (`WinExec` / `ShellExecute` of a program, with an optional script when it
+  closes): disabled, returns 0 like a failed `WinExec` (< 32); a game script must not launch
+  programs on a modern PC;
+- **builtin 68** (print a bitmap on the default printer): returns 0 = no printer;
+- **builtin 94** (`ExtractIcon` of an EXE/DLL/ICO into a bitmap): returns 0 = failure;
+- **builtin 8B** (`GetDriveType` of the drive the game was started from): always 3 (fixed disk):
+  the port always runs from an installed copy;
+- **builtins 8C / 90** (free memory, Windows version): 0x7FFF (maximum detail) and 0x1F (what a
+  16-bit program sees on Windows 3.1/NT; 0x5F would mean Windows 95);
+- **builtin 9A** (`DAT_5B92`, Ctrl+Shift screen-capture dragging, an authors' debugging aid):
+  stored; it only exempts Ctrl+Shift clicks from the rectangle selection, the capture itself is
+  not ported;
+- **builtin 91** (rectangle selection, `DAT_1546`): the selection works (press, move, release
+  → script `(x1, y1, x2, y2)`), but the XOR rubber rectangle (S_080) is not drawn;
+- **builtin 78** (window shake with `ScrollDC`): the last frame is presented shifted by
+  `(dx, dy)`, then `(−dx, −dy)`, one frame each, then back in place (`rt->shake`, `main.c`);
+- **opcode 45** (backup of `<WindowsDir>\7THLEVEL.INI`): done on the port's own INI, in its
+  folder.
 
 ## Input (WndProc 1008:ED3C)
 
@@ -304,8 +331,9 @@ On library change (FUN_1008_C5F8) the resources are unloaded, pending 0x52Cs rem
 pauses zeroed (A_041): the port stops all sounds. Example: in TOPSOPN2 wave 5869 notifies
 script 23, which does the `link` to the menu (end of the introduction).
 
-Not ported (not used by Upsy): fades and delay of 08/0F, opcodes 09, 0E, 35, 5C, builtin
-97 (script at the start of each wave, `DAT_1540`).
+Not ported (not used by Upsy): fades and delay of 08/0F, opcodes 09, 0E, 5C. Builtin 97
+(script queued at the start of each wave, `DAT_1540`) is stored in `rt->v1540`; opcode 08 does
+not queue it yet.
 
 ## Player controllers
 
@@ -377,19 +405,38 @@ frees the release and vice versa. Otherwise the zone runs the script of table DS
 `--input`. The INI key for the choice is `InputMethod1`/`InputMethod2` in
 `[Topsy Turvy Games.Upsy]` (0 keyboard, 1 joystick, 2 mouse).
 
-Not ported (not used by the games): key sequences (opcode 52 = 4F0A and 55 = 4FCE, list
-checked by timer FUN_1008_4C9E after `Timeout` ms of the INI), state reading (5092),
-direction "mirror" (52D0, table DS:0022), 5190, builtin 82.
+**History and combinations** (not used by the present games, ported). FUN_1008_4DE8 also
+keeps a history of the codes in the record (`+0`): for directions and button presses (not for
+releases or 0) `h = (h & 0xFF) · 16 + code`; the first code of a run arms the timer
+FUN_1008_4C9E for `[Input] Timeout` ms of 7THLEVEL.INI (default 200, `DAT_4929`). When it
+expires (FUN_1008_4D4E; 4C9E itself is not decompiled, the call is probable) the history is
+consumed: the first enabled entry of the **combination table** (opcode **56**, FUN_1008_4F0A, 4
+entries at `+0x1CE`) with a script and `(mask & history) == pattern` queues
+`script(player, key)`; with the **latch** on (opcode **55**, FUN_1008_5190, `+0x1FD`) it is kept
+as pending instead, and `55 {player, 0, fire ≠ 0}` queues it later. Opcode **52**
+(FUN_1008_4FCE) edits a second table of 50 entries at `+0xC` with the same operands; nothing
+reads it except FUN_1008_4D4E, which copies the pending record from that table at the index of
+the matched combination (an original quirk, kept). Table entries are 9 bytes `{key, script,
+pattern, mask, enabled}` (raw words of the instruction). Operands of 52/56: `{+2 player, +4 key,
++6 script, +8 pattern, +0xA mask, +0xC all (byte), +0xD enable (byte), +0xE disable (byte)}`:
+for one entry (looked up by key, FUN_1008_4ACE) enable/disable set its flag, script 0 removes
+it, pattern 0 updates key and script in place, otherwise a new enabled entry is inserted sorted
+by descending pattern (FUN_1008_4972); with "all" enable/disable apply to every entry, script 0
+empties the table, otherwise every entry gets the script. Opcode **57** (FUN_1008_52D0)
+mirrors a player: direction codes sent to the script go through DS:0022 `{0, 1, 2, 3, 4, 5, 7,
+6, 8, 0x0A, 9, 0x0C, 0x0B}` (left and right swapped). Opcode **58** (FUN_1008_5092) reads
+`{direction (mirrored), buttons, pending combination present}` into variables. Builtin 82 is
+ported too.
 
 ## Builtin functions (`Engine_Command`, expression 0x0D)
 
 | Id | Function | Certainty |
 |---|---|---|
 | 2E | random number inclusive between two bounds (CRT `rand`, 1018:03CC); ported | certain |
-| 2F | `GETKEYSTATE` | certain |
-| 31 | `GETANGLE` | certain |
+| 2F | `GETKEYSTATE`; ported | certain |
+| 31 | `GETANGLE`; ported | certain |
 | 39 / 3A | `lstrcmp` / `lstrcmpi` of two strings (ids), −1/0/1; ported | certain |
-| 41 / 42 | `COSINE` / `SINE` | certain |
+| 41 / 42 | `COSINE` / `SINE`; ported | certain |
 | 62 | absolute value | certain |
 | 44 | sprite visible? (S_063, field +0x56); 0 if not loaded; ported | certain |
 | 65 / 66 | copy of a sprite (type 17) into an **extra slot** of the index (`RESCOPYRESOURCE`, first free slot after the entries of the file; the in-memory data, including the click scripts, are copied) and its loading; 66 unloads it and frees the slot. Ported (`lb7_copy_entry`) | certain |
@@ -405,14 +452,14 @@ direction "mirror" (52D0, table DS:0022), 5190, builtin 82.
 | 79 | `{high, low, &high, &low}`: sum on a base-10000 number held in two words (`*&high·10000 + *&low += high·10000 + low`, with carry; CRT 1018:05EE/0554/0620); scores of TOPSMAIN; ported | certain |
 | 73 | `{&x, &y, step, steps, x0, y0, xm, ym, x1, y1}`: point of the **parabola** through (x0,y0) at the start, (xm,ym) in the middle and (x1,y1) at the end, at step `step` of `steps` (S_074 → TOPSYS01 1000:1758, integer arithmetic in 1/1024; the same curve as animation command 05); with `steps` = 0 the variables stay unchanged; ported | certain |
 | 70 | pause (1) / resume (0) of all audio (A_042: wave and music); ported | certain |
-| 7C | `COLLIDE` (collision) | certain |
-| 7E | `DISTANCE` | certain |
-| 7F | `REFLECTANGLE` | certain |
+| 7C | `COLLIDE` (collision); ported | certain |
+| 7E | `DISTANCE`; ported | certain |
+| 7F | `REFLECTANGLE`; ported | certain |
 | 80 | `SQUAREROOT`: `(int16) trunc(sqrt(a))` (TOPSYU01 1000:1098, `fistp` with truncation) | certain |
-| 85 | `GETQUADRANT` | certain |
+| 85 | `GETQUADRANT`; ported | certain |
 | 90 | `GETVERSION`: 0x1F (0x5F with Windows 95); ported (Windows 3.1: 0x1F) | certain |
 | 93 | **inactivity timeout** `(script, seconds)` (`DAT_150C`, 16-bit interval = seconds × 1000): input re-arms it, on expiry the script is queued (FUN_1008_DEAA); it is not `TIMEGETTIME`; ported | certain |
-| 96 | launches a program (`WINEXEC`/`SHELLEXECUTE`) | certain |
+| 96 | launches a program (`WINEXEC`/`SHELLEXECUTE`); disabled in the port (returns 0) | certain |
 | 99 | pause (1) / resume (0) of the music with a counter (A_025); ported | certain |
 | 5A, 5B | animation command built by the script `{sprite, command, values...}`: 5A immediate (empties the command buffer), 5B queued (S_066/S_068 -> FUN_1000_59F6) | certain, ported (`spr_command`) |
 
@@ -432,48 +479,42 @@ is called by the C generated by `scr2c` (`port\game\*.c`).
 | 72 | `{&x, &y, step, steps, x0, y0, x1, y1}` | point of the segment: `x = x0 + R((x1 − x0)·step/steps)`, same for y, R = rounded half away from zero (unsigned step/steps); steps 0 = nothing written | S_073 → TOPSYS01 FUN_1000_3F84 | ported |
 | 98 | `{dx, dy}` | scrolls the whole scene: every sprite (position, start and targets of a running 05/09) moves by (dx, dy) (FUN_1000_6736); the original also scrolls the window with `ScrollDC` and repaints the uncovered strips | S_085 | ported (`spr_scroll_all`; the screen is redrawn every frame) |
 
-### Builtins of the original NOT ported
+### Other builtins of the original
 
-Present in the `Engine_Command` switch (id < 0xB3) and so far without a handler in `rt_builtin`:
-the `default` branch counts the id in `unimpl_builtin`, writes `?? builtin XX` into the trace and
-returns 0. None is used by Upsy and Outwords. Descriptions are inferred from the decompiled code
-(`certain` only where the call is a Windows API).
+All present in the `Engine_Command` switch (id < 0xB3). A builtin that leaves no result (`break`
+in Engine_Command) leaves the expression cell holding the builtin id itself, so the port returns
+the id (as for 83/84/8A when the sprite is missing). Unknown ids < 0xB3 do nothing in the
+original; the port counts them in `unimpl_builtin`, writes `?? builtin XX` and returns 0.
 
-| Id | Args | What it does in the original |
-|---|---|---|
-| 02, 03, 05 | 1, 1, 2-3 | like opcodes 02 `load`, 03 `unload`, 05 `show` (FUN_1008_740E / 722A / A990) |
-| 0A, 0B | 1 | like opcodes `fadein` / `fadeout` (FUN_1008_48EA / 492E, speed 1..100) |
-| 1B | n | `wvsprintf` into a 72-byte buffer and `_DEBUGSTR` if `DAT_5B73` (debug) |
-| 2F | 1 | `GETKEYSTATE` (exists as opcode 2F, ported; the builtin does not) |
-| 31 | 4 | `GETANGLE` (TOPSYU01); pinball: 37 uses |
-| 41, 42 | 1 | `COSINE`, `SINE` |
-| 5F | 1 | if the sprite is loaded, `DAT_14FE` = sprite: starts a drag from a script; returns whether it exists |
-| 63 | 1 | `lstrlen` of a string (id) |
-| 64 | 3 | `{string, substring, from}`: position of the substring starting at `from` (`strstr`, FUN_1018_0720), −1 if absent |
-| 68 | 1 | bitmap (type 1): value measured by FUN_1008_897A on a DC (0 if `DAT_0CF8` ≠ 0); to be analyzed |
-| 74 | 2 | `{string, i}`: i-th character (0 past the end) |
-| 75 | 3 | `{string variable, i, character}`: writes a character (i < 0x7F) |
-| 76 | 1 | `atoi` of a string (copy into 112 bytes + CRT 1018:1464) |
-| 78 | 2 | `S_075` (TOPSYS01); pinball |
-| 7A, 7B | 4 | like 79 (base-10000 number in two words): 7A multiplies (CRT 1018:05EE), 7B divides (1018:0554); inferred, pinball (7B: 12 uses) |
-| 7C | 8 | `COLLIDE` (TOPSYU01); pinball: 8 uses |
-| 7D | 2-4 | `{destination bitmap, source bitmap [, x [, y]]}` (missing x/y = 0): FUN_1008_708A copies the source (type 1 or 18) into the loaded destination type 1 bitmap at offset (x, y), clipped to the destination, through FUN_1000_2890 of the sprite DLL (S_019); returns 1 if something was copied. Both rectangles are centred on the bitmaps' anchors (S_076), the source is shifted by (x, y) and clipped (IntersectRect); source index 0 is transparent, except inside short RLE literals (0x80..0xFE), which are copied as they are. The pixels of the loaded resource change, so every sprite using the bitmap shows them; they last until the last sprite holding it is unloaded (reference count, FUN_1008_60EE) or the library changes. Ported in `spr_bitmap_blit` (sprite.c). Used once by Le Food Feud (TOPSFOOD.BIN script 8428: food splats on the scenery; test `tools\eventi\food_7d.txt` of the dev repository) |
-| 7E, 7F | 4, 2 | `DISTANCE`, `REFLECTANGLE` |
-| 83, 84 | 1, 2 | `S_077(sprite)` (value), `S_078(sprite, …)`; pinball (84: 19 uses) |
-| 85 | 1 | `GETQUADRANT` |
-| 86 | 5 | `S_048`: pixel test between two sprites (like opcode 21); pinball: 24 uses |
-| 8A | 3 | `S_079(sprite, …)` → value; pinball: 8 uses |
-| 8B | 0 | `DAT_14FA`: drive type (`GETDRIVETYPE` of the letter the game starts from, in `Lib_Open`) |
-| 8E | 1 | `DAT_150A` = script (written, never read in the decompiled code) |
-| 91 | 1 | `DAT_1546` = script (read by 1008:35B2 and by the sprite search); with 0 it cancels the drag (1008:3900) |
-| 92 | 2 | `{type-10 resource, value}`: writes field +0x3A of the movie record (FUN_1010_1550) |
-| 94 | 3 | `{type-1 bitmap, string, UINT}`: creates the image from a file/icon and draws it into the resource (FUN_1008_87D0 → S_019), returns 0/1; to be analyzed |
-| 95 | 1 | writes a default guest name into the string variable |
-| 96 | 1-3 | `WINEXEC` of the program (string), or FUN_1008_DB8C with a final script; returns 1 on success (the table above described it as "launches a program") |
-| 97 | 1 | `DAT_1540` = script run at the start of every wave |
-| 9B | 3 | stub: zeroes the first byte of the destination string (FUN_1008_B298) |
-| 9C | 3 | empty stub (FUN_1008_B2B0) |
-| ≥ B3 | – | DLL plug-in functions (`FUN_1008_2386`): they do not exist in the present games |
-
-The builtins of the table above without the word "ported" (2F, 31, 41, 42, 7C, 7E, 7F, 85,
-96) also belong to this list: the "Certainty" column concerns only the identification.
+| Id | Args | What it does in the original | Port |
+|---|---|---|---|
+| 02, 03, 05 | 1, 1, 2-3 | like opcodes 02 `load`, 03 `unload`, 05 `show` (FUN_1008_740E / 722A / A990), returning the handler result and never ending the script; for 05 the animation is always a resource id (args: sprite, animation, optional hide first) | ported (`rt_load`, `rt_unload`, `rt_show`) |
+| 0A, 0B | 1 | like opcodes `fadein` / `fadeout` (FUN_1008_48EA / 492E, speed 0 or > 100 = 100) | ported (`rt_fade`) |
+| 1B | n | `wvsprintf(format, args)` into a 72-byte buffer and `_DEBUGSTR` if `Debug=1` (`DAT_5B73`) | ported: trace, and stderr with `Debug=1` |
+| 2F | 1 | `GETKEYSTATE(vk) < 0` | ported |
+| 31, 41, 42 | 4, 1, 1 | `GETANGLE`, `COSINE`, `SINE` (TOPSYU01) | ported |
+| 5F | 1 | if the sprite is loaded, `DAT_14FE` = sprite (FUN_1008_4324): it is dragged with the cursor until the button is released (release script and G(5009/5010) as for a normal drag); returns 1/0 | ported |
+| 63 | 1 | `lstrlen` of a string (id); missing string: no result | ported |
+| 64 | 3 | `{string, substring, from}`: index of the substring searched from `from` < `lstrlen` (`strstr`, FUN_1018_0720), −1 if absent or bad arguments | ported (negative `from`: −1) |
+| 68 | 1 | prints a type-1 bitmap on the default printer (FUN_1008_8BD0) | 0 = no printer (see "Win16-only features") |
+| 72 | 8 | `S_073` linear interpolation of two variables | ported (table above) |
+| 74 | 2 | `{string, i}`: `(signed char) s[i]`, 0 if missing or `lstrlen < i` | ported |
+| 75 | 3 | `{string variable, i, character}`: writes a character (i < 0x7F, no terminator) | ported |
+| 76 | 1 | `atoi` of a string (copy into 112 bytes + CRT 1018:1464) | ported |
+| 78 | 2 | `S_075`: window shake by `(dx, dy)` with three `ScrollDC` | ported (`rt->shake`) |
+| 7A, 7B | 4 | base-10000 number in two words: 7A multiplies, 7B divides | ported |
+| 7C, 7E, 7F, 85 | 8, 4, 2, 1 | `COLLIDE`, `DISTANCE`, `REFLECTANGLE`, `GETQUADRANT` (TOPSYU01) | ported |
+| 7D | 2-4 | draws a bitmap into another bitmap (S_019) | ported (`spr_bitmap_blit`) |
+| 83, 84, 86, 8A | 1, 2, 5, 3 | sprite user word (S_077/S_078), pixel overlap (S_048), point on sprite (S_079) | ported |
+| 8B | 0 | `DAT_14FA`: `GetDriveType` of the letter of the first library | 3 = fixed disk |
+| 8E | 1 | `DAT_150A` = script, called with 1/0 when the window is activated / deactivated (FUN_1008_E896) | ported (`rt_set_active`) |
+| 91 | 1 | `DAT_1546` = script: a left press starts a rectangle selection, on release the script receives `(x1, y1, x2, y2)`; 0 cancels the selection (FUN_1008_3900) | ported without the rubber rectangle |
+| 92 | 2 | `{type-10 movie, value}`: word +0x3A of the movie object (FUN_1010_1550); nothing reads it | trace only |
+| 94 | 3 | `{type-1 bitmap, file, index}`: `ExtractIcon` drawn into the bitmap (FUN_1008_87D0), 1/0 | 0 = failure |
+| 95 | 1 | writes `guest` (DS:001C) into the string variable | ported |
+| 96 | 1-3 | `WinExec(program)`, or with a script FUN_1008_DB8C (window hidden, `ShellExecute`, script when the program ends); 1 on success | disabled, returns 0 |
+| 97 | 1 | `DAT_1540` = script queued with the wave id whenever opcode 08 starts a wave | stored (`rt->v1540`); queuing belongs to opcode 08 (audio) |
+| 98 | 2 | `S_085`: scrolls the view and every sprite by `(dx, dy)` | ported (table above) |
+| 9B | 3 | leftover: empties the string variable of the third argument (FUN_1008_B298) | ported |
+| 9C | 3 | leftover: does nothing (FUN_1008_B2B0) | ported |
+| ≥ B3 | – | DLL plug-in functions (`FUN_1008_2386`, `EXTERNALCALL`): they do not exist in the present games | not ported |
