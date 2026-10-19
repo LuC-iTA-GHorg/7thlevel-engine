@@ -455,7 +455,7 @@ returns 0. None is used by Upsy and Outwords. Descriptions are inferred from the
 | 78 | 2 | `S_075` (TOPSYS01); pinball |
 | 7A, 7B | 4 | like 79 (base-10000 number in two words): 7A multiplies (CRT 1018:05EE), 7B divides (1018:0554); inferred, pinball (7B: 12 uses) |
 | 7C | 8 | `COLLIDE` (TOPSYU01); pinball: 8 uses |
-| 7D | 2-4 | `{destination bitmap, source bitmap [, x, y]}`: FUN_1008_708A copies the source (type 1 or 18) into the loaded destination type 1 bitmap at offset (x, y), clipped to the destination, through FUN_1000_2890 of the sprite DLL (S_019); returns 1 if something was copied. Used once by Le Food Feud (TOPSFOOD.BIN); **not ported yet** |
+| 7D | 2-4 | `{destination bitmap, source bitmap [, x [, y]]}` (missing x/y = 0): FUN_1008_708A copies the source (type 1 or 18) into the loaded destination type 1 bitmap at offset (x, y), clipped to the destination, through FUN_1000_2890 of the sprite DLL (S_019); returns 1 if something was copied. Both rectangles are centred on the bitmaps' anchors (S_076), the source is shifted by (x, y) and clipped (IntersectRect); source index 0 is transparent, except inside short RLE literals (0x80..0xFE), which are copied as they are. The pixels of the loaded resource change, so every sprite using the bitmap shows them; they last until the last sprite holding it is unloaded (reference count, FUN_1008_60EE) or the library changes. Ported in `spr_bitmap_blit` (sprite.c). Used once by Le Food Feud (TOPSFOOD.BIN script 8428: food splats on the scenery; test `tools\eventi\food_7d.txt` of the dev repository) |
 | 7E, 7F | 4, 2 | `DISTANCE`, `REFLECTANGLE` |
 | 83, 84 | 1, 2 | `S_077(sprite)` (value), `S_078(sprite, …)`; pinball (84: 19 uses) |
 | 85 | 1 | `GETQUADRANT` |

@@ -541,8 +541,15 @@ static int play_input(FILE *in, uint32_t elapsed, Rt *rt, Video *v)
 			if (rt->g && a >= 0 && a < 0x13FE)
 				rt->g[a] = (int16_t)b;
 		}
-		else if (!strcmp(cmd, "shot"))
-			printf("%s %s\n", video_save_bmp(v, arg) ? "saved" : "ERROR saving", arg);
+		else if (!strcmp(cmd, "shot")) { /* the file name is the rest of the line (spaces allowed) */
+			int at = 0;
+			(void)sscanf(line, "%*u %*s %n", &at);
+			char *file = line + at;
+			file[strcspn(file, "\r\n")] = 0;
+			for (size_t n = strlen(file); n && (file[n - 1] == ' ' || file[n - 1] == '\t'); n--)
+				file[n - 1] = 0;
+			printf("%s %s\n", video_save_bmp(v, file) ? "saved" : "ERROR saving", file);
+		}
 		else if (!strcmp(cmd, "quit"))
 			return 0;
 	}

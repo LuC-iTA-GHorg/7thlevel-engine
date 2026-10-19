@@ -433,6 +433,8 @@ int rt_unload(Rt *rt, unsigned id)
 	tr(rt, "   unload %u (type %u)\n", id, type);
 	if (type == 17 && rt->spr)
 		spr_unload(rt->spr, id);
+	if (type == 1 && rt->spr) /* the bitmap's memory is freed: changes by builtin 7D are lost */
+		spr_bitmap_forget(rt->spr, id);
 	/* unloading a sound stops it (FUN_1008_722A): TOPSFINA wave 59 loops until
 	   script 52 unloads it */
 	if (type == LB7_T_WAVE) {
@@ -2853,6 +2855,13 @@ int16_t rt_builtin(Rt *rt, unsigned id, unsigned argc, const int16_t *a)
 			return 0x83;
 		return v;
 	}
+	case 0x7D: /* {destination, source[, dx[, dy]]}: draws bitmap source (type 1 or text 18) into
+		bitmap destination (type 1), index 0 transparent (FUN_1008_708A -> S_019); 1 = drawn.
+		Le Food Feud script 8428: expressions painted onto the faces */
+		if (argc < 2 || !rt->spr)
+			return 0;
+		return (int16_t)spr_bitmap_blit(rt->spr, (uint16_t)a[0], (uint16_t)a[1], argc > 2 ? a[2] : 0,
+			argc > 3 ? a[3] : 0);
 	case 0x84: /* {sprite, value}: writes the word +0x44 (S_078) */
 		if (argc < 2 || !spr_ok(rt, (uint16_t)a[0]))
 			return 0x84;

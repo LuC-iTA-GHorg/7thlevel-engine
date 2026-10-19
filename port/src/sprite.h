@@ -103,6 +103,10 @@ typedef struct {
 	/* current text of the type 18 resources (structure +0x2A of 1010:1CA0; opcode 29) */
 	struct { uint16_t id; char s[128]; } texts[64];
 	int n_texts;
+	/* type 1 bitmaps changed in memory by builtin 7D (FUN_1008_708A): in the original the
+	   pixels of the loaded resource change, so every frame using that bitmap sees them */
+	struct { uint16_t id; const uint8_t *data; Lb7Bitmap bmp; uint8_t *pix; } edited[32];
+	int n_edited;
 } SprWorld;
 
 /* Diagnostics (upsy --probe X Y): in the trace, every draw covering point (X, Y) of the
@@ -154,6 +158,13 @@ void spr_set_text(SprWorld *w, unsigned id, const char *s);                   /*
  * order; if it has no frames it inherits the old one's images, position and mirroring, otherwise
  * the old one is hidden. Unloading the old one is up to the caller. 0 = error. */
 int spr_replace(SprWorld *w, unsigned old_id, unsigned new_id);
+/* Builtin 7D (FUN_1008_708A -> S_019 = TOPSYS01 1000:2890): draws bitmap src (type 1, or a text
+ * of type 18) into bitmap dest (type 1); both rectangles are centred on their anchors, src is
+ * shifted by (dx, dy) and clipped to dest; index 0 of src is transparent. 1 = something drawn. */
+int spr_bitmap_blit(SprWorld *w, unsigned dest, unsigned src, int dx, int dy);
+/* Unloading of a type 1 resource: if no loaded sprite holds it, the next use reads its original
+ * pixels again (a sprite that is unloaded releases its members the same way). */
+void spr_bitmap_forget(SprWorld *w, unsigned id);
 void spr_update(SprWorld *w, uint32_t now_ms);
 void spr_draw(SprWorld *w, Video *v);
 

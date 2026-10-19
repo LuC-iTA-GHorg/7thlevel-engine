@@ -16,6 +16,8 @@ typedef void (*SprDrawFn)(void *ctx, const uint8_t *pix, const Lb7Bitmap *b, int
 	int flip_x, int flip_y);
 static void sprite_images(SprWorld *w, const Video *v, Sprite *s, SprDrawFn fn, void *ctx);
 static int cmp_layer(const void *a, const void *b);
+static uint8_t *bitmap_pixels(SprWorld *w, const uint8_t *data, uint32_t size, const Lb7Bitmap *b);
+static void edited_release(SprWorld *w, unsigned id);
 static void add_stamp(void *ctx, const uint8_t *pix, const Lb7Bitmap *b, int l, int t, int tr, int fx, int fy);
 
 static void movie_stop(Sprite *s)
@@ -102,6 +104,9 @@ void spr_clear(SprWorld *w)
 		free(w->stamps[i].pix);
 	w->n_stamps = 0;
 	w->n_texts = 0;
+	for (int i = 0; i < w->n_edited; i++)
+		free(w->edited[i].pix);
+	w->n_edited = 0;
 }
 
 void spr_background(SprWorld *w, int mode, unsigned bmp800, unsigned bmp640, int color)
@@ -232,8 +237,10 @@ int spr_load(SprWorld *w, unsigned id)
 void spr_unload(SprWorld *w, unsigned id)
 {
 	Sprite *s = find(w, id);
-	if (s)
+	if (s) {
 		spr_free(s);
+		edited_release(w, 0); /* FUN_1008_6502: members whose count drops to 0 are freed */
+	}
 }
 
 void spr_move(SprWorld *w, unsigned id, int x, int y)
@@ -975,13 +982,8 @@ static int frame_pix(SprWorld *w, SprFrame *f)
 	if (w->rt && w->rt->trace) /* diagnostics: first draw of each frame */
 		fprintf(w->rt->trace, "%7u    [draw %ux%u anchor %d,%d cel %d,%d flags %X]\n", w->now_ms, f->bmp.width,
 			f->bmp.height, f->bmp.w5, f->bmp.w6, f->cx, f->cy, f->bmp.flags);
-	f->pix = malloc((size_t)f->bmp.stride * f->bmp.height);
-	if (!f->pix || !lb7_bitmap_decode(f->data, f->size, &f->bmp, f->pix)) {
-		free(f->pix);
-		f->pix = NULL;
-		return 0;
-	}
-	return 1;
+	f->pix = bitmap_pixels(w, f->data, f->size, &f->bmp); /* also the pixels changed by builtin 7D */
+	return f->pix != NULL;
 }
 
 /* TOPSYS01 FUN_1000_0B2C: bitmap centered on the position, then shifted by the header's anchor
@@ -1377,13 +1379,8 @@ void spr_draw(SprWorld *w, Video *v)
 	if (!bg->data)
 		video_clear(v, (uint8_t)w->bg_color);
 	else {
-		if (!bg->pix) {
-			bg->pix = malloc((size_t)bg->bmp.stride * bg->bmp.height);
-			if (bg->pix && !lb7_bitmap_decode(bg->data, bg->size, &bg->bmp, bg->pix)) {
-				free(bg->pix);
-				bg->pix = NULL;
-			}
-		}
+		if (!bg->pix)
+			bg->pix = bitmap_pixels(w, bg->data, bg->size, &bg->bmp);
 		if (bg->pix) /* centered like a sprite at 0,0 (FUN_1000_375A with the buffer origin at
 			   (W-1)/2 and the screen origin at W/2): at 800x600 at 1,1, row and column 0 black */
 			video_blit(v, bg->pix, &bg->bmp, video_width(v) / 2 - ((int)bg->bmp.width - 1) / 2,
@@ -1400,4 +1397,209 @@ void spr_draw(SprWorld *w, Video *v)
 	qsort(order, (size_t)n, sizeof(order[0]), cmp_layer);
 	for (int i = 0; i < n; i++)
 		sprite_images(w, v, order[i], draw_to_video, v);
+}
+
+/* ---------------------------------------------------------------- builtin 7D */
+
+static int edited_find(SprWorld *w, const uint8_t *data)
+{
+	for (int i = 0; i < w->n_edited; i++)
+		if (w->edited[i].data == data)
+			return i;
+	return -1;
+}
+
+/* Frames (and background) that use the bitmap redo their pixels at the next draw. */
+static void edited_refresh(SprWorld *w, const uint8_t *data)
+{
+	for (int k = 0; k < SPR_MAX; k++)
+		for (int j = 0; w->spr[k].used && j < w->spr[k].n_frames; j++) {
+			SprFrame *f = &w->spr[k].frames[j];
+			if (!f->text_id && f->data == data) {
+				free(f->pix);
+				f->pix = NULL;
+			}
+		}
+	for (int k = 0; k < 2; k++)
+		if (w->bg[k].data == data) {
+			free(w->bg[k].pix);
+			w->bg[k].pix = NULL;
+		}
+}
+
+/* Pixels (bottom-up) of a bitmap: the copy changed by 7D if there is one, otherwise decoded from
+ * the library. The caller frees them. */
+static uint8_t *bitmap_pixels(SprWorld *w, const uint8_t *data, uint32_t size, const Lb7Bitmap *b)
+{
+	size_t n = (size_t)b->stride * b->height;
+	uint8_t *pix = malloc(n ? n : 1);
+	if (!pix)
+		return NULL;
+	int e = edited_find(w, data);
+	if (e >= 0)
+		memcpy(pix, w->edited[e].pix, n);
+	else if (!lb7_bitmap_decode(data, size, b, pix)) {
+		free(pix);
+		return NULL;
+	}
+	return pix;
+}
+
+/* Source of 1000:2890: mask of the pixels that are written. Raw bitmaps skip index 0; in RLE
+ * rows, runs of 0 (byte < 0x80) and the zeros of long literals (0xFF, count) skip, while short
+ * literals (0x80..0xFE, ~byte bytes) are copied as they are, zeros included (1000:28ED, 29B0). */
+static void rle_mask(const uint8_t *d, uint32_t size, const Lb7Bitmap *b, uint8_t *mask)
+{
+	size_t si = b->hdr_size + b->height * 2u;
+	for (unsigned y = 0; y < b->height; y++) {
+		uint8_t *row = mask + (size_t)y * b->stride, *end = row + b->stride;
+		for (;;) {
+			if (si >= size)
+				return;
+			uint8_t c = d[si++];
+			if (c == 0)
+				break;
+			if (c < 0x80) {
+				if (si >= size || row + c > end)
+					return;
+				memset(row, d[si++] != 0, c);
+				row += c;
+				continue;
+			}
+			unsigned n = (uint8_t)~c;
+			int keep_zero = 1;
+			if (c == 0xFF) {
+				if (si >= size)
+					return;
+				n = d[si++];
+				keep_zero = 0;
+			}
+			if (si + n > size || row + n > end)
+				return;
+			for (unsigned i = 0; i < n; i++)
+				row[i] = keep_zero || d[si + i] != 0;
+			row += n;
+			si += n;
+		}
+	}
+}
+
+/* S_076: rectangle of a bitmap centred on its anchor (+0xA, +0xC), right/bottom excluded. */
+static void bitmap_rect(const Lb7Bitmap *b, int r[4])
+{
+	r[0] = b->w5 + (1 - (int)b->width) / 2;
+	r[1] = b->w6 - ((int)b->height - 1) / 2;
+	r[2] = r[0] + b->width;
+	r[3] = r[1] + b->height;
+}
+
+int spr_bitmap_blit(SprWorld *w, unsigned dest, unsigned src, int dx, int dy)
+{
+	/* destination: type 1 only (FUN_1008_740E with type 1) */
+	Lb7Entry de = lb7_entry(w->lib, dest);
+	const uint8_t *dd = lb7_entry_data(w->lib, de);
+	Lb7Bitmap db;
+	if (!dd || de.type != 1 || !lb7_bitmap_header(dd, de.size, &db))
+		return 0;
+	/* source: bitmap (1) or text (18) */
+	Lb7Entry se = lb7_entry(w->lib, src);
+	const uint8_t *sd = lb7_entry_data(w->lib, se);
+	SprFrame sf = { 0 };
+	uint8_t *mask = NULL;
+	if (sd && se.type == 1 && lb7_bitmap_header(sd, se.size, &sf.bmp)) {
+		sf.pix = bitmap_pixels(w, sd, se.size, &sf.bmp);
+		mask = sf.pix ? malloc((size_t)sf.bmp.stride * sf.bmp.height) : NULL;
+		if (mask) {
+			size_t n = (size_t)sf.bmp.stride * sf.bmp.height;
+			if ((sf.bmp.flags & LB7_BMP_RLE) && edited_find(w, sd) < 0) {
+				memset(mask, 0, n);
+				rle_mask(sd, se.size, &sf.bmp, mask);
+			}
+			else
+				for (size_t i = 0; i < n; i++)
+					mask[i] = sf.pix[i] != 0;
+		}
+	}
+	else if (sd && se.type == 18) {
+		sf.text_id = (uint16_t)src;
+		if (text_frame(w, &sf) && (mask = malloc((size_t)sf.bmp.stride * sf.bmp.height)) != NULL)
+			for (size_t i = 0; i < (size_t)sf.bmp.stride * sf.bmp.height; i++)
+				mask[i] = sf.pix[i] != 0;
+	}
+	if (!mask) {
+		free(sf.pix);
+		return 0;
+	}
+	/* OffsetRect + IntersectRect */
+	int rd[4], rs[4], ri[4];
+	bitmap_rect(&db, rd);
+	bitmap_rect(&sf.bmp, rs);
+	rs[0] += dx, rs[2] += dx, rs[1] += dy, rs[3] += dy;
+	ri[0] = rd[0] > rs[0] ? rd[0] : rs[0];
+	ri[1] = rd[1] > rs[1] ? rd[1] : rs[1];
+	ri[2] = rd[2] < rs[2] ? rd[2] : rs[2];
+	ri[3] = rd[3] < rs[3] ? rd[3] : rs[3];
+	int drawn = 0;
+	if (ri[0] < ri[2] && ri[1] < ri[3]) {
+		int e = edited_find(w, dd);
+		if (e < 0 && w->n_edited < (int)(sizeof(w->edited) / sizeof(w->edited[0]))) {
+			uint8_t *pix = bitmap_pixels(w, dd, de.size, &db);
+			if (pix) {
+				e = w->n_edited++;
+				w->edited[e].id = (uint16_t)dest;
+				w->edited[e].data = dd;
+				w->edited[e].bmp = db;
+				w->edited[e].pix = pix;
+			}
+		}
+		if (e >= 0) {
+			/* rows top-down in rectangle coordinates; memory bottom-up */
+			int width = ri[2] - ri[0], height = ri[3] - ri[1];
+			int dx0 = ri[0] - rd[0], dy0 = ri[1] - rd[1], sx0 = ri[0] - rs[0], sy0 = ri[1] - rs[1];
+			for (int y = 0; y < height; y++) {
+				uint8_t *drow = w->edited[e].pix + (size_t)(db.height - 1 - (dy0 + y)) * db.stride + dx0;
+				size_t so = (size_t)(sf.bmp.height - 1 - (sy0 + y)) * sf.bmp.stride + sx0;
+				for (int x = 0; x < width; x++)
+					if (mask[so + x])
+						drow[x] = sf.pix[so + x];
+			}
+			edited_refresh(w, dd);
+			drawn = 1;
+		}
+	}
+	if (w->rt && w->rt->trace)
+		fprintf(w->rt->trace, "%7u    [7D: bitmap %u into %u at %d,%d: %s]\n", w->now_ms, src, dest, dx, dy,
+			drawn ? "drawn" : "no overlap");
+	free(mask);
+	free(sf.pix);
+	return drawn;
+}
+
+/* Is the bitmap a member of a loaded sprite (count entry[2] of the resource table)? */
+static int bitmap_held(SprWorld *w, const uint8_t *data)
+{
+	for (int k = 0; k < SPR_MAX; k++)
+		for (int j = 0; w->spr[k].used && j < w->spr[k].n_frames; j++)
+			if (!w->spr[k].frames[j].text_id && w->spr[k].frames[j].data == data)
+				return 1;
+	return 0;
+}
+
+/* The original frees a type 1 resource (FUN_1008_60EE) only when no sprite holds it any more;
+ * the next load reads the file again. id = 0: every changed bitmap no longer held. */
+static void edited_release(SprWorld *w, unsigned id)
+{
+	for (int i = 0; i < w->n_edited; i++)
+		if ((!id || w->edited[i].id == id) && !bitmap_held(w, w->edited[i].data)) {
+			const uint8_t *data = w->edited[i].data;
+			free(w->edited[i].pix);
+			w->edited[i--] = w->edited[--w->n_edited];
+			edited_refresh(w, data);
+		}
+}
+
+void spr_bitmap_forget(SprWorld *w, unsigned id)
+{
+	if (id)
+		edited_release(w, id);
 }
