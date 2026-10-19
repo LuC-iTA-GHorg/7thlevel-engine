@@ -164,7 +164,7 @@ Lengths in bytes (L). "var" = length held in a word of the instruction.
 | 59 | var | `return` | `Script_EvalExpr` | certain | return value, end of the script |
 | 5C | 14 | `midiparams` | 1008:9EAC | certain | A_032 on MIDI `+2` (loaded first): `+5` ≠ 0 sets the tempo, every delay becomes `delay × mult / div` with `+0xA` = divisor and `+0xC` = multiplier (operands; divisor 0 = unscaled; 3 ms minimum after scaling); `+4` ≠ 0 sets the channel mute flags: for each bit of the mask `+6` the channel takes the bit of `+8`, a channel that becomes muted gets All Notes Off (CC 0x7B), then its note-ons are dropped. Kept by the MIDI event until it is unloaded; ported ([AUDIO.md](AUDIO.md)) |
 | 5D | 4 | `volume` | 1008:A32A | certain | device volume one step up (`+2` ≠ 0) or down: `+3` 0 all, **1 CD (AUX)**, **2 MIDI**, **3 wave**; 32 levels (`>> 11` of the Windows volume, FUN_1008_8CBE), written to `[audio]` MidiVolume / WaveVolume. Without a CD AUX device device 1 does nothing (A_017 reads 0, A_031 fails, CdVolume not written); ported |
-| 5E | 6 | `textcolor` | 1010:1F58 | probable | `{type-18 text, word}`: stores the raw word in the runtime text record (word 2, +4: the colour, an encoded operand) and redraws (1010:1DE8); not used by the present games. **Not ported**: the text colour lives in the sprite engine (`sprite.c`), which has no setter yet |
+| 5E | 6 | `textcolor` | 1010:1F58 | probable | `{type-18 text, word}`: stores the raw word in the runtime text record (word 2, +4: the colour, an encoded operand) and redraws (1010:1DE8); the record word comes from word 0 of the resource (1010:1CA0) and drawing (1010:1B32) maps the white DrawText pixels to its low byte, so the raw word is not decoded: a constant `c` arrives as `c - 0x7531` and its low byte is used as is; not used by the present games. Ported (`spr_set_text_color`) |
 | 60 | 4 | `setpalette` | 1008:0770 | certain | `{palette resource (type 14)}`: loads it (740E(0xE)), copies 0x3B0 bytes = 236 × {R, G, B, flag} into the base palette DS:1110 (= DS:10E8 + 10·4) and applies them to colours 10..245 (S_005); ported (`rt->pal_base`/`rt->pal`, applied by the frame) |
 | 61 | 12 | `palfill` | 1008:067C | certain | `{first, count, restore byte, R G B flag}`: in palette mode only (always in the port): `first` (> 9, else nothing), `count` (≤ 0xEC) entries set to the colour at +8, or with the byte ≠ 0 restored from the base palette DS:10E8; applied at once (ANIMATEPALETTE); ported |
 | 6A | 4 | | inline | certain | enables the debug hook (`DAT_40DC`) |
@@ -193,18 +193,14 @@ in `port\src\rt.c`):
   26 2B 2C 2D 38 3B 3C 40 48 49 4C 4D 4E 4F 59 6A 71 77 8D 8F (flow control, calls,
   expressions, engine variables, INI, cursor, fade, timers);
 - **handled by `rt_op`**: 04 06 07 08 09 0C 0E 0F 10 13 18 19 1A 1C 1E 20 21 24 27 28 29 2A 2E 2F
-  30 31 32 34 35 36 37 39 3A 3D 3E 3F 41 42 43 44 45 46 47 4B 50 51 52 53 54 55 56 57 58 5C 5D 60
+  30 31 32 34 35 36 37 39 3A 3D 3E 3F 41 42 43 44 45 46 47 4B 50 51 52 53 54 55 56 57 58 5C 5D 5E 60
   61;
-- **not ported yet**: the other opcodes of the original. `scr2c` emits them anyway as a call to
-  `rt_op`; the final branch of `rt_op` increments `unimpl_op[op]`, writes `?? op XX not yet
-  ported` into the trace and **continues**. A word that is not an opcode of the original at all
-  gives runtime error 0x73 (see above).
+- **fallback**: no opcode of the original is left for it; the final branch of `rt_op` still
+  increments `unimpl_op[op]`, writes `?? op XX not yet ported` into the trace and **continues**.
+  A word that is not an opcode of the original at all gives runtime error 0x73 (see above).
 
-**Opcodes not ported yet** (they exist in the original; none is used by the present games):
-
-| Opcode | Mnemonic / meaning | Notes |
-|---|---|---|
-| 5E | text colour (type 18) | needs a setter in `sprite.c` |
+Every opcode of the original is handled by `rt_op` (or compiled inline by `scr2c`): no opcode is
+left unported.
 
 Partial: 06 (the background transitions of types 2-5, field +10/+12/+14, are not ported: the
 field is 0 in every present game), 09/0E/5D (CD audio behaves as with no CD drive), 38 (`%l`

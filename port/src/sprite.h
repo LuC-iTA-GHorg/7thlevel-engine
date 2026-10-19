@@ -105,6 +105,10 @@ typedef struct {
 	/* current text of the type 18 resources (structure +0x2A of 1010:1CA0; opcode 29) */
 	struct { uint16_t id; char s[128]; } texts[64];
 	int n_texts;
+	/* colour of the type 18 resources changed by opcode 5E (word +4 of the 1010:1CA0 record,
+	   initially the low byte of word 0 of the resource) */
+	struct { uint16_t id; uint8_t color; } text_colors[64];
+	int n_text_colors;
 	/* type 1 bitmaps changed in memory by builtin 7D (FUN_1008_708A): in the original the
 	   pixels of the loaded resource change, so every frame using that bitmap sees them */
 	struct { uint16_t id; const uint8_t *data; Lb7Bitmap bmp; uint8_t *pix; } edited[32];
@@ -175,6 +179,9 @@ int spr_visible(SprWorld *w, unsigned id);
 /* Opcode 29: new text for the type 18 resource id; frames that use it are redone. */
 const char *spr_get_text(SprWorld *w, unsigned id);
 void spr_set_text(SprWorld *w, unsigned id, const char *s);                   /* S_063: campo +0x56 */
+/* Opcode 5E (1010:1F58): new colour (palette index) for the type 18 resource id; frames that
+ * use it are redone. */
+void spr_set_text_color(SprWorld *w, unsigned id, uint8_t color);
 /* Opcode 18 (TOPSY FUN_1008_E06C): the new sprite takes the old one's place in the drawing
  * order; if it has no frames it inherits the old one's images, position and mirroring, otherwise
  * the old one is hidden. Unloading the old one is up to the caller. 0 = error. */

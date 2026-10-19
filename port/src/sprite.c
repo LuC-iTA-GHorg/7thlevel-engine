@@ -113,6 +113,7 @@ void spr_clear(SprWorld *w)
 		free(w->stamps[i].pix);
 	w->n_stamps = 0;
 	w->n_texts = 0;
+	w->n_text_colors = 0;
 	for (int i = 0; i < w->n_edited; i++)
 		free(w->edited[i].pix);
 	w->n_edited = 0;
@@ -779,7 +780,7 @@ static void run_anim(SprWorld *w, Sprite *s)
 			if (w->last_video && s->visible && w->bg[bg_index(w, w->last_video)].data) {
 				sprite_images(w, w->last_video, s, add_stamp, w);
 				s->visible = 0;
-				stop_anim(s);
+				stop_anim(w, s);
 				return;
 			}
 			cmd_done(s);
@@ -1041,6 +1042,17 @@ const char *spr_get_text(SprWorld *w, unsigned id)
 	return text_of(w, id);
 }
 
+/* The frames with this text are redone when drawing (1010:1DE8 rebuilds the bitmap). */
+static void text_invalidate(SprWorld *w, unsigned id)
+{
+	for (int k = 0; k < SPR_MAX; k++)
+		for (int j = 0; j < w->spr[k].n_frames; j++)
+			if (w->spr[k].used && w->spr[k].frames[j].text_id == id) {
+				free(w->spr[k].frames[j].pix);
+				w->spr[k].frames[j].pix = NULL;
+			}
+}
+
 void spr_set_text(SprWorld *w, unsigned id, const char *s)
 {
 	int i = 0;
@@ -1053,12 +1065,33 @@ void spr_set_text(SprWorld *w, unsigned id, const char *s)
 	}
 	w->texts[i].id = (uint16_t)id;
 	snprintf(w->texts[i].s, sizeof(w->texts[i].s), "%s", s);
-	for (int k = 0; k < SPR_MAX; k++) /* the frames with this text are redone when drawing */
-		for (int j = 0; j < w->spr[k].n_frames; j++)
-			if (w->spr[k].used && w->spr[k].frames[j].text_id == id) {
-				free(w->spr[k].frames[j].pix);
-				w->spr[k].frames[j].pix = NULL;
-			}
+	text_invalidate(w, id);
+}
+
+/* Colour of the text: record word +4, copied from word 0 of the resource by 1010:1CA0 and
+ * replaced (raw) by opcode 5E; 1010:1B32 maps the white pixels of the DrawText bitmap to its low
+ * byte (MAPBYTES table: 0 -> 0, 0xFF -> colour). */
+static uint8_t text_color(SprWorld *w, unsigned id, const uint8_t *d)
+{
+	for (int i = 0; i < w->n_text_colors; i++)
+		if (w->text_colors[i].id == id)
+			return w->text_colors[i].color;
+	return d[0];
+}
+
+void spr_set_text_color(SprWorld *w, unsigned id, uint8_t color)
+{
+	int i = 0;
+	while (i < w->n_text_colors && w->text_colors[i].id != id)
+		i++;
+	if (i == w->n_text_colors) {
+		if (w->n_text_colors >= 64)
+			return;
+		w->n_text_colors++;
+	}
+	w->text_colors[i].id = (uint16_t)id;
+	w->text_colors[i].color = color;
+	text_invalidate(w, id);
 }
 
 /* Type 18 member (20 bytes): {color, font, text, height, x, y, width, height of the
@@ -1073,7 +1106,7 @@ static int text_frame(SprWorld *w, SprFrame *f)
 	int x = (int16_t)rd16(d + 8), y = (int16_t)rd16(d + 0xA), W, H;
 	uint8_t *top;
 	if (!text_render(rt_string(w->rt, rd16(d + 2)), anim_val(w, rd16(d + 6)), text_of(w, f->text_id),
-			(int16_t)rd16(d + 0xC), (int16_t)rd16(d + 0xE), flags, d[0], &top, &W, &H))
+			(int16_t)rd16(d + 0xC), (int16_t)rd16(d + 0xE), flags, text_color(w, f->text_id, d), &top, &W, &H))
 		return 0;
 	f->pix = malloc((size_t)W * H);
 	if (!f->pix) {

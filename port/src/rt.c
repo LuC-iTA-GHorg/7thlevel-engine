@@ -3335,6 +3335,18 @@ int rt_op(Rt *rt, int16_t *l, const uint8_t *bytes)
 	case 0x5D: /* device volume (1008:A32A) */
 		op_volume(rt, bytes);
 		return 1;
+	case 0x5E: { /* {type-18 text, word}: text colour (1010:1F58) */
+		/* the word is stored raw (not decoded as an operand) in the record field +4 and the
+		   text redrawn (1010:1DE8); drawing uses its low byte as the palette index */
+		unsigned id = (uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 2));
+		uint16_t c = lb7_rd16(bytes + 4);
+		if (lb7_entry(&rt->lib, id).type != 18)
+			return 1;
+		tr(rt, "   text %u colour = %u\n", id, c & 0xFF);
+		if (rt->spr)
+			spr_set_text_color(rt->spr, id, (uint8_t)c);
+		return 1;
+	}
 	case 0x28: { /* {sprite, var x, var y}: sprite position (1008:961C -> S_054) */
 		unsigned id = (uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 2));
 		int x = 0, y = 0;
