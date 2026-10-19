@@ -3428,6 +3428,13 @@ int rt_op(Rt *rt, int16_t *l, const uint8_t *bytes)
 	case 0x06: /* background {mode, bitmap 800x600, bitmap 640x480, color} */
 		tr(rt, "   background mode %u bitmap %d/%d color %u\n", lb7_rd16(bytes + 2),
 			rt_operand(rt, l, lb7_rd16(bytes + 4)), rt_operand(rt, l, lb7_rd16(bytes + 6)), lb7_rd16(bytes + 8));
+		/* FUN_1008_0654: transition word +10 != 0 -> FUN_1008_05D8 (mode 0, previous bitmap)
+		   runs the effect; if it cannot, the plain background (FUN_1008_03CE) */
+		if (rt->spr && lb7_rd16(bytes + 10) && lb7_rd16(bytes + 2) == 0 &&
+			spr_background_transition(rt->spr, (uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 4)),
+				(uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 6)), lb7_rd16(bytes + 8),
+				lb7_rd16(bytes + 10), lb7_rd16(bytes + 12), lb7_rd16(bytes + 14)))
+			return 1;
 		if (rt->spr)
 			spr_background(rt->spr, lb7_rd16(bytes + 2),
 				(uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 4)),

@@ -250,7 +250,11 @@ On-screen comparison between the original game running under OTVDM and the port.
 - **Display** (`spr_draw`): op 06 mode 2 = the composition buffer is no longer cleared (it is kept in
   `SprWorld.comp`), other modes ≥ 3 = black; op 2A = clip rectangle (outside it the previous pixels
   stay); op 27 = integer zoom of the composed image, dest = zoom·pos − (offset·zoom − 1). All reset by
-  the library switch (S_047, `spr_clear`). Op 06 transitions (+10) are **not** ported (unused).
+  the library switch (S_047, `spr_clear`). Op 06 transitions (+10, FUN_1008_0F10) are ported in `spr_background_transition`: types 1
+  (interlaced lines, +12 interleave), 2/4 closing frame, 3/5 opening frame (30 steps, 2/3 also
+  narrow horizontally), 6 timed interlaced lines (+12 strips, +14 ms), 7/8 and 9/10 wipes
+  (from right/left, bottom/top; +12 strips default 60, +14 ms); the composed screen-sized buffer
+  stays the background until the next op 06 (unused by the 9 games).
 - **Palette**: `rt->pal_base` (DS:10E8, the library palette) and `rt->pal`; op 60 copies a type 14
   resource (236 × RGBx) into 10..245 of both, op 61 fills a range with one colour or restores it from
   the base; `main.c` applies `rt->pal` when `pal_dirty`.

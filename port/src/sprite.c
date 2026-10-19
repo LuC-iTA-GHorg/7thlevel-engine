@@ -119,6 +119,8 @@ void spr_clear(SprWorld *w)
 	w->n_edited = 0;
 	free(w->comp);
 	w->comp = NULL;
+	free(w->bg_canvas);
+	w->bg_canvas = NULL;
 	/* S_047 (library switch): no zoom, no clip, background colour 0 (S_031(0, 0)) */
 	w->zoom = w->zoom_x = w->zoom_y = 0;
 	w->clip_on = 0;
@@ -138,6 +140,8 @@ void spr_background(SprWorld *w, int mode, unsigned bmp800, unsigned bmp640, int
 	/* FUN_1008_03CE: mode 1 -> 0104 + S_031(color); mode 2 -> 0104 (S_031(0, 0) = black) then
 	   S_031(0xFFFF, -1): world +0x880 = 0xFFFF, the composition buffer is no longer cleared and
 	   what was drawn stays (trails); any other mode -> 0104 alone = solid black */
+	free(w->bg_canvas); /* a new background replaces the buffer composed by a transition */
+	w->bg_canvas = NULL;
 	w->bg_keep = mode == 2;
 	w->bg_color = mode == 1 ? color : mode == 0 ? color : 0;
 	for (int i = 0; i < w->n_stamps; i++) /* new background: the previous stamps disappear */
@@ -158,6 +162,259 @@ void spr_background(SprWorld *w, int mode, unsigned bmp800, unsigned bmp640, int
 			w->bg_id[k] = (uint16_t)id;
 		}
 	}
+}
+
+/* Transition of opcode 06 (TOPSY 1008:0F10). State of one run: the canvas being changed (the
+   background bitmap DAT_0E46), the new image at screen size (DAT_071C) and the screen size
+   (DAT_14F8 = width, DAT_14F6 = height). */
+typedef struct {
+	SprWorld *w;
+	uint8_t *dst, *src;
+	int W, H;
+	unsigned n_present, every;
+} BgTr;
+
+/* FUN_1008_0B4C: S_008 copies rectangle {l, t, r, b} of the new bitmap into the background,
+   S_028 invalidates it. */
+static void tr_copy(BgTr *t, int l, int tp, int r, int b)
+{
+	if (l < 0)
+		l = 0;
+	if (tp < 0)
+		tp = 0;
+	if (r > t->W)
+		r = t->W;
+	if (b > t->H)
+		b = t->H;
+	for (int y = tp; y < b && l < r; y++)
+		memcpy(t->dst + (size_t)y * t->W + l, t->src + (size_t)y * t->W + l, (size_t)(r - l));
+}
+
+/* S_001 (DAT_0E38): one world frame. The original repaints only the invalidated rectangles, so
+   the effects that call it once per scan line (types 1 and 6) present every 'every' calls. */
+static void tr_frame(BgTr *t)
+{
+	if (++t->n_present % t->every)
+		return;
+	if (t->w->rt && t->w->rt->frame)
+		t->w->rt->frame(t->w->rt);
+}
+
+static int tr_has_frames(BgTr *t)
+{
+	return t->w->rt && t->w->rt->frame;
+}
+
+static uint32_t tr_now(BgTr *t)
+{
+	return t->w->rt ? t->w->rt->now_ms : 0;
+}
+
+/* FUN_1008_0C0E: rectangle i of n of the shrinking frame; mode 0 = full width. */
+static void tr_rect(BgTr *t, int mode, unsigned n, unsigned i, int r[4])
+{
+	r[0] = mode ? (int)((uint32_t)i * (uint32_t)t->W / (n * 2 - 1)) : 0;
+	r[2] = t->W - r[0];
+	r[1] = (int)((uint32_t)i * (uint32_t)t->H / (n * 2 - 1));
+	r[3] = t->H - r[1];
+}
+
+/* FUN_1008_0BC6 (top and bottom bands) + FUN_1008_0B80 (left and right bands, mode != 0)
+   between the inner rectangle c and the outer rectangle o. */
+static void tr_ring(BgTr *t, int mode, const int c[4], const int o[4])
+{
+	tr_copy(t, o[0], o[1], o[2], c[1]);
+	tr_copy(t, o[0], c[3], o[2], o[3]);
+	if (mode) {
+		tr_copy(t, o[0], c[1], c[0], c[3]);
+		tr_copy(t, c[2], c[1], o[2], c[3]);
+	}
+}
+
+/* Background bitmap f (or the solid colour) at screen size, placed as spr_draw does. */
+static uint8_t *bg_render(SprWorld *w, SprFrame *f, int color, int vw, int vh)
+{
+	uint8_t *out = malloc((size_t)vw * (size_t)vh);
+	if (!out)
+		return NULL;
+	memset(out, (uint8_t)color, (size_t)vw * (size_t)vh);
+	if (f->data && !f->pix)
+		f->pix = bitmap_pixels(w, f->data, f->size, &f->bmp);
+	if (!f->pix)
+		return out;
+	const Lb7Bitmap *b = &f->bmp;
+	int x = vw / 2 - ((int)b->width - 1) / 2, y = vh / 2 - ((int)b->height - 1) / 2;
+	for (int row = 0; row < b->height; row++) {
+		int sy = y + row;
+		if (sy < 0 || sy >= vh)
+			continue;
+		const uint8_t *src = f->pix + (size_t)(b->height - 1 - row) * b->stride; /* bottom-up */
+		for (int i = 0; i < b->width; i++)
+			if (x + i >= 0 && x + i < vw)
+				out[(size_t)sy * vw + x + i] = src[i];
+	}
+	return out;
+}
+
+int spr_background_transition(SprWorld *w, unsigned bmp800, unsigned bmp640, int color,
+	int type, unsigned p12, unsigned p14)
+{
+	/* FUN_1008_05D8: only with a background bitmap already present (mode 0 is checked by the
+	   caller); the new bitmap (+4, or +6 at 640x480) must load */
+	const Video *v = w->last_video;
+	if (!v || type < 1 || type > 10)
+		return 0;
+	int k = bg_index(w, v);
+	unsigned id = k && bmp640 ? bmp640 : bmp800;
+	SprFrame *old = &w->bg[k];
+	Lb7Entry e = lb7_entry(w->lib, id);
+	const uint8_t *d = id ? lb7_entry_data(w->lib, e) : NULL;
+	SprFrame nf = { 0 };
+	if ((!old->data && !w->bg_canvas) || !d || e.type != 1 || !lb7_bitmap_header(d, e.size, &nf.bmp))
+		return 0;
+	nf.data = d;
+	nf.size = e.size;
+	BgTr t = { w, NULL, NULL, video_width(v), video_height(v), 0, 1 };
+	if (w->bg_canvas && w->bg_cw == t.W && w->bg_ch == t.H) { /* a previous transition */
+		t.dst = w->bg_canvas;
+		w->bg_canvas = NULL;
+	}
+	else
+		t.dst = bg_render(w, old, w->bg_color, t.W, t.H);
+	t.src = bg_render(w, &nf, w->bg_color, t.W, t.H);
+	free(nf.pix);
+	if (!t.dst || !t.src) {
+		free(t.dst);
+		free(t.src);
+		return 0;
+	}
+	/* the stamps lived in the old background buffer: the canvas has them under the new image */
+	for (int i = 0; i < w->n_stamps; i++) {
+		const SprStamp *st = &w->stamps[i];
+		for (int row = 0; row < st->bmp.height; row++) {
+			int sy = t.H / 2 + st->top + row;
+			if (sy < 0 || sy >= t.H)
+				continue;
+			const uint8_t *src = st->pix + (size_t)(st->bmp.height - 1 - row) * st->bmp.stride;
+			for (int i2 = 0; i2 < st->bmp.width; i2++) {
+				int sx = t.W / 2 + st->left + i2;
+				if (sx >= 0 && sx < t.W && src[i2])
+					t.dst[(size_t)sy * t.W + sx] = src[i2];
+			}
+		}
+		free(st->pix);
+	}
+	w->n_stamps = 0;
+	free(w->bg_canvas);
+	w->bg_canvas = t.dst;
+	w->bg_cw = t.W;
+	w->bg_ch = t.H;
+	int events_off = w->events_off; /* S_061(0): events suppressed during the effect */
+	w->events_off = 1;
+	unsigned W = (unsigned)t.W, H = (unsigned)t.H;
+	switch (type) {
+	case 1: { /* FUN_1008_09AE: interlaced scan lines, p12 = interleave (default 10) */
+		unsigned n = p12 ? p12 : 10, per = (H + n - 1) / n;
+		t.every = H / 60 ? H / 60 : 1;
+		for (unsigned p = 0; p < n; p++) {
+			unsigned row = p;
+			for (unsigned c = 0; c < per && row <= H; c++, row += n) {
+				tr_copy(&t, 0, (int)row, t.W, (int)row + 1);
+				tr_frame(&t);
+			}
+		}
+		break;
+	}
+	case 2: case 4: { /* FUN_1008_0A32(mode, 30): a closing frame, from the edges to the centre */
+		int mode = type == 2, c[4], o[4];
+		tr_rect(&t, mode, 30, 29, c);
+		tr_rect(&t, mode, 30, 0, o);
+		for (unsigned i = 1; i < 30; i++) {
+			tr_rect(&t, mode, 30, i, c);
+			tr_ring(&t, mode, c, o);
+			tr_frame(&t);
+			memcpy(o, c, sizeof(o));
+		}
+		tr_copy(&t, c[0], c[1], c[2], c[3]);
+		break;
+	}
+	case 3: case 5: { /* FUN_1008_0AC0(mode, 30): an opening frame, from the centre to the edges
+		(the inner rectangle is never updated: each step fills the ring up to rectangle i) */
+		int mode = type == 3, c[4], o[4];
+		tr_rect(&t, mode, 30, 29, c);
+		tr_copy(&t, c[0], c[1], c[2], c[3]);
+		for (int i = 28; i >= 0; i--) {
+			tr_frame(&t);
+			tr_rect(&t, mode, 30, (unsigned)i, o);
+			tr_ring(&t, mode, c, o);
+		}
+		break;
+	}
+	case 6: { /* FUN_1008_0C72(ms = p14, strips = p12): timed interleaved scan lines */
+		unsigned n = p12 ? (p12 > H ? H : p12) : 10;
+		unsigned stride = n == 1 ? 1 : n - 1, lim = stride, e2 = 0;
+		uint32_t step = p14 / (H / n + n - 1), next = tr_now(&t);
+		t.every = H / 60 ? H / 60 : 1;
+		while (e2 < H) {
+			if (tr_has_frames(&t) && (int32_t)(tr_now(&t) - next) < 0) {
+				t.n_present = t.every - 1;
+				tr_frame(&t);
+				continue;
+			}
+			next += step;
+			for (unsigned r = e2; r < lim; r += stride) {
+				tr_copy(&t, 0, (int)r, t.W, (int)r + 1);
+				tr_frame(&t);
+			}
+			e2 += e2 < stride ? 1 : n;
+			lim = lim + n < H ? lim + n : H;
+		}
+		break;
+	}
+	default: { /* 7/8 FUN_1008_0D80 horizontal (7 = from the right), 9/10 FUN_1008_0E48
+		vertical (9 = from the bottom): p12 strips (default 60), p14 total ms */
+		int horiz = type <= 8, dir = (type & 1) ? -1 : 1;
+		unsigned size = horiz ? W : H, n = p12 ? (p12 > size ? size : p12) : 60;
+		int delta = (int)(size / n) * dir, a, b;
+		if (delta < 0) {
+			a = (int)size + delta;
+			b = (int)size;
+		}
+		else {
+			a = 0;
+			b = delta;
+		}
+		uint32_t next = tr_now(&t);
+		while (delta && a >= 0 && (unsigned)a < size && b >= 0) {
+			tr_frame(&t);
+			if (!tr_has_frames(&t) || (int32_t)(tr_now(&t) - next) >= 0) {
+				next += p14 / n;
+				if (horiz)
+					tr_copy(&t, a, 0, b, t.H);
+				else
+					tr_copy(&t, 0, a, t.W, b);
+				a += delta;
+				b += delta;
+			}
+		}
+		break;
+	}
+	}
+	w->events_off = events_off;
+	free(t.src);
+	/* DAT_0E46 keeps the composed image (strips the effect did not reach keep the old pixels):
+	   the canvas stays the background until the next opcode 06 or library change */
+	for (int j = 0; j < 2; j++) {
+		free(w->bg[j].pix);
+		memset(&w->bg[j], 0, sizeof(w->bg[j]));
+		w->bg_id[j] = 0;
+	}
+	w->bg[k] = nf;
+	w->bg[k].pix = NULL;
+	w->bg_id[k] = (uint16_t)id;
+	w->bg_keep = 0;
+	w->bg_color = color;
+	return 1;
 }
 
 static Sprite *find(SprWorld *w, unsigned id)
@@ -1600,6 +1857,8 @@ void spr_draw(SprWorld *w, Video *v)
 	}
 	if (w->bg_keep && keep)
 		; /* +0x880 = 0xFFFF: FUN_1000_3152 is skipped, the old pixels stay */
+	else if (w->bg_canvas && w->bg_cw == vw && w->bg_ch == vh)
+		memcpy(fb, w->bg_canvas, fbsize); /* background composed by an opcode 06 transition */
 	else if (!bg->data)
 		video_clear(v, (uint8_t)w->bg_color);
 	else {

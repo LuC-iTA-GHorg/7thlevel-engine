@@ -123,6 +123,10 @@ typedef struct {
 	int clip_on, clip[4];
 	/* opcode 27 (S_053, world +0x876/+0x878/+0x87A): display zoom 1..4, source offset */
 	int zoom, zoom_x, zoom_y;
+	/* opcode 06 transition in progress (TOPSY 1008:0F10): screen-sized background buffer (the
+	   original's bitmap DAT_0E46) into which rectangles of the new bitmap are copied */
+	uint8_t *bg_canvas;
+	int bg_cw, bg_ch;
 	uint8_t *comp;          /* last composition (op 06 mode 2, op 2A), comp_w x comp_h */
 	int comp_w, comp_h;
 } SprWorld;
@@ -146,6 +150,12 @@ void spr_stamp(SprWorld *w, const Video *v, unsigned id, int keep);
 /* Opcode 06 {mode, bitmap 800x600, bitmap 640x480, color} (FUN_1008_03CE): mode 0 = bitmap,
  * 1 = solid color, 2 = the screen is no longer cleared, other = black. */
 void spr_background(SprWorld *w, int mode, unsigned bmp800, unsigned bmp640, int color);
+/* Opcode 06 with transition word +10 != 0 (FUN_1008_05D8 -> 0F10): only with mode 0 and a
+ * background bitmap already present; the new bitmap enters with effect type 1..10 (parameters
+ * p12 = word +12, p14 = word +14), synchronously, a frame (rt->frame) per step. 0 = not done
+ * (the caller then runs the plain spr_background, like FUN_1008_0654). */
+int spr_background_transition(SprWorld *w, unsigned bmp800, unsigned bmp640, int color,
+	int type, unsigned p12, unsigned p14);
 /* Opcode 2A (S_056): clip rectangle x1,y1,x2,y2 (inclusive); x1 >= x2 or y1 >= y2 = no clip. */
 void spr_set_clip(SprWorld *w, int x1, int y1, int x2, int y2);
 /* Opcode 27 (S_053): display zoom 0..4 with source offset; 0 = normal. */
