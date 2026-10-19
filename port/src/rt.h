@@ -135,20 +135,61 @@ struct Rt {
 	} hits[64];
 	int n_hits;
 	uint16_t last_rand2e;      /* DAT_0CFA: last offset of opcode 2E */
-	/* ---- sound events (opcode 08/0F wave, 50/51 MIDI; TOPSYA01). When a sound ends the DLL sends
-	   0x52C {wave/MIDI, script} to the window: script != 0 goes into the deferred-call queue
-	   with the sound as argument, script 0 = the sound is unloaded. The end is computed
-	   from the duration, like FUN_1000_37EE, so it also works without an audio device. */
+	/* ---- sound events (opcode 08/0F wave, 50/51/5C MIDI; TOPSYA01, docs\AUDIO.md). When a sound
+	   ends the DLL sends 0x52C {wave/MIDI, script} to the window: script != 0 goes into the
+	   deferred-call queue with the sound as argument, script 0 = the sound is unloaded. The end
+	   is computed from the duration, like FUN_1000_37EE, so it also works without an audio
+	   device (game time: the traces are repeatable). */
+	struct RtWave {            /* wave event (A_011), one per wave resource, freed by unload */
+		uint16_t res;          /* index entry (0 for movie audio) */
+		uint8_t used, movie;
+		uint8_t orphan;        /* default sound of a previous library (DAT_0E40 kept by a link) */
+		int voice;             /* mixer voice (audio_wave_*) */
+		int16_t prio;          /* header +8 (W+0x72), signed */
+		uint8_t overlay;       /* header +5 (W+0x7B) */
+		uint8_t playing;       /* W+0x77 */
+		uint8_t notify;        /* W+0x75: "notify at end of sound" */
+		uint16_t script;       /* W+0x6C: encoded operand of the end-of-sound script */
+		uint8_t vol;           /* W+0x81: volume 0..16 kept between plays (op 08 +6/+9) */
+		int loops;             /* W+0x70: repeats of the last start */
+		uint32_t pass_ms;      /* duration of one pass */
+		uint32_t values;       /* PCM sample values of one pass (fades) */
+		uint32_t rate, channels;
+		uint32_t end_ms;       /* natural end (all passes), 0 = never (repeated forever) */
+		uint32_t prio_until;   /* W+0x3C: start + one pass (FUN_1000_37EE), holds the priority */
+		uint8_t delay;         /* W+0x7C: delayed start pending (re-armed at every natural end) */
+		uint8_t dmin, drange;  /* W+0x83 / W+0x84: delay in whole seconds, random range */
+		uint32_t delay_due;    /* W+0x38 */
+	} waves[100];              /* at most 100 events (FUN_1000_267C) */
+	int wave_queued;           /* ctx+0xC != 0: buffers queued (some wave playing), FUN_1000_3600 clears it */
+	int16_t wave_prio;         /* ctx+0x40: current priority (start gate of FUN_1000_3ADA) */
+	struct {                   /* device volume fade of "stop all" with duration (FUN_1000_3472) */
+		int on, steps;
+		int vol, start, delta; /* 0..0xFFFF */
+		uint32_t next;
+	} wave_fade;
+	int wave_hwvol;            /* wave device volume 0..0xFFFF (ctx+0x26) */
+	uint16_t wave_hook;        /* builtin 97 (DAT_1540): script queued at every opcode 08, encoded */
+	uint32_t a_seed;           /* rand() of TOPSYA01 (FUN_1000_4348), own seed */
+	uint8_t a_seeded;
 	struct RtSound {
-		uint16_t res;          /* index entry, 0 = free slot */
+		uint16_t res;          /* index entry, 0 = no music */
 		uint16_t script;       /* encoded operand of the end-of-sound script */
 		uint8_t notify;        /* "notify at end of sound" flag */
-		int voice;             /* mixer entry (wave) */
+		uint8_t orphan;        /* default MIDI of a previous library (DAT_0E42 kept by a link) */
 		uint32_t end_ms;       /* 0 = never ends (repeated forever) */
-	} snd[16], music;
+	} music;
+	struct RtMidiEv {          /* MIDI events touched by opcode 5C (A_032: W+0x22/0x24/0x30..) */
+		uint16_t res, mult, div, mute;
+	} midi_ev[32];
+	/* default sprite (byte +0x14, DAT_0E3E/0E40/0E42) and DAT_5B76 */
+	uint16_t def_sprite, def_wave, def_midi;
+	uint8_t def_old;           /* DAT_5B76: set by a library change, the defaults are leftovers */
+	uint8_t waves_frozen;      /* waves held: paused (builtin 70 / Pause) or window inactive */
 	int waves_paused, midi_paused;  /* builtin 70 / counter of builtin 99 (A_025) */
 	uint32_t waves_paused_at, midi_paused_at;
 	int vol_wave, vol_midi;    /* opcode 5D: device levels 0..31 (>> 11 of Windows) */
+	uint8_t no_wave_volume;    /* [audio] DisableWaveVolume: waveOutSetVolume never called */
 	uint32_t now_ms;           /* last time passed to rt_tick */
 	int screen_w, screen_h;    /* resolution: G(5003)/G(5004) (default 640x480) */
 	int mouse_x, mouse_y;      /* G(5005)/G(5006), relative to the screen center */
@@ -252,6 +293,12 @@ int rt_unload(Rt *rt, unsigned id);   /* 0x03 */
 int rt_show(Rt *rt, unsigned sprite, unsigned anim, int hide_first); /* 0x05 */
 void rt_link(Rt *rt, const char *file, int stop_audio, int ret); /* 0x12 */
 void rt_quit(Rt *rt);                 /* 0x0D */
+/* Movie audio (FUN_1010_0D12: A_011 + A_029 with block NULL): takes ownership of pcm;
+ * returns the voice (0 = not started), freed with rt_movie_audio_end (FUN_1010_10F2). */
+int rt_movie_audio(Rt *rt, const Lb7Wave *w, int16_t *pcm, uint32_t samples);
+void rt_movie_audio_end(Rt *rt, int voice);
+/* Sprite with byte +0x14 loaded (FUN_1008_6BAA + end of 6D44): default sound/music. */
+void rt_default_sprite(Rt *rt, unsigned sprite);
 int rt_run_random(Rt *rt, int16_t *l, uint8_t *last, unsigned n, const uint16_t *ids); /* 0x16 */
 int rt_run_next(Rt *rt, int16_t *l, uint8_t *last, unsigned n, const uint16_t *ids);   /* 0x17 */
 int rt_run_random_list(Rt *rt, int16_t *l, uint8_t *last, unsigned list);            /* 0x16 list */

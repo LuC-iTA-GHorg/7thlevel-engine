@@ -81,21 +81,21 @@ Lengths in bytes (L). "var" = length held in a word of the instruction.
 |---|---|---|---|---|---|
 | 01 | 6+2n | `call` | 1008:CDAC | certain | +2 script, +4 frame size, +5 number of arguments, +6 arguments → synchronous execution |
 | 02 | 4 | `load` | 1008:740E | certain | loads resource +2 according to its type (1 bitmap, 4 MIDI, 9 wave, 10, 11/14/15/16 data, 12, 13, 17, 18); types without a handler → 0 = the script ends |
-| 03 | 4 | `unload` | 1008:722A | certain | unloads/stops resource +2 according to type (A_012/A_013 sounds, S_013 sprite) |
+| 03 | 4 | `unload` | 1008:722A | certain | unloads/stops resource +2 according to type (A_012/A_013 sounds, S_013 sprite); a loaded sprite also unloads its members (FUN_1008_6502): its wave and MIDI members are destroyed, so their sound stops |
 | 04 | 20 | `click` | 1008:3924 | certain | **click**: `+2` sprite (0 = rectangular area), `+4` script, `+6..+0xC` x1 y1 x2 y2 of the area, `+0xE` argument, flag `+0x10` all, `+0x11` re-enable only, `+0x12` disable; ported (section "Input") |
 | 05 | 8 | `show` | 1008:A990 | certain | +2 sprite (type 17), +4 animation (type 15) or 0 = fixed frame (the **raw** word 0, not decoded: `scr2c` fixed, it used to produce `G(0)`), +6 hide-first flag (`SPRITES_ANIMATIONS.md`) |
 | 06 | 16 | | 1008:0654 | certain (comparison with the original game running under OTVDM) | **background** `{mode, 800x600 bitmap, 640x480 bitmap, color}`: mode 1 = solid fill; ported (`spr_background`) |
 | 07 | 10 | `drag` | 1008:3A6E | certain | **drag** `{sprite, start script, release script, fixed}`: fixed = 0 makes the sprite draggable; with fixed ≠ 0 on the one being dragged it ends the drag (that is why it reads the cursor); ported. Not used by Upsy |
-| 08 | 28 | `wave` | 1008:8EAC | certain | **plays a wave** `{wave, block A_029}`: `+4` repetitions (0 once, −1 infinite), `+6` sets volume, `+7` **notify at end of sound**, `+9` volume 0..16, `+0xA`/`+0xE` fades in ms, `+0x12` delay in ms, `+0x1A` **end-of-sound script**, resolved when the wave starts (can be a local variable); resource not of type 9 = the script stops; ported (section "Audio") |
-| 09 | 4 | | 1008:8E92 | probable | A_027 (audio); not used by Upsy |
+| 08 | 28 | `wave` | 1008:8EAC | certain | **plays a wave** `{wave, block A_029}`: `+4` repetitions (0 once, n more passes, −1 infinite), `+6` sets volume, `+7` **notify at end of sound**, `+8` no queue flush, `+9` volume 0..16 (kept by the wave for later plays), `+0xA` fade-in ms, `+0xE` fade-out ms (at the end of the last pass), `+0x12`/`+0x16` random start delay min/max (whole seconds; the wave then restarts after every end), `+0x1A` **end-of-sound script**, resolved when the wave starts (can be a local variable); start gate on the **priority** (header +8) and **exclusivity** of non-overlay waves (header +5); without a wave event (100 in use) the script is queued at once if notify is on; resource not of type 9 = the script stops; then the builtin 97 script is queued; ported ([AUDIO.md](AUDIO.md)) |
+| 09 | 4 | `cdplay` | 1008:8E92 | certain | A_027: plays CD audio track = low byte of the raw word `+2` (MCI `cdaudio`), result in `DAT_5B6E`. Without a CD audio device (the port) the MCI open fails after flushing the wave queue (current priority back to 0) and `DAT_5B6E` = 0; ported that way ([AUDIO.md](AUDIO.md)) |
 | 0A, 0B | 4 | `fadein`, `fadeout` | 1008:4880 | certain | palette fade, +2 speed 1..100 (0 or >100 = 100) = number of steps, one per redrawn frame, **synchronous** (FUN_1008_466C/478C → 4622 → S_021, colors 10..245); fade in acts only with the screen off (`DAT_5B6D`, off at startup), fade out only when on; a `fadeout` during the startup script does not fade but cancels the automatic fade in (DAT_5B75); on library change fade out 100, after the startup script fade in 100. Ported (`rt_fade`, `rt->frame`) |
 | 0C | 12 | `key` | 1008:345C | certain | **key → script** `{key, script, Ctrl, Shift, enable, disable, release}`: `+2` Windows virtual key code (0 = all), `+4` script, `+6` with Ctrl, `+7` with Shift, `+8` re-enable, `+9` disable, `+10` on release; ported |
 | 0D | 2 | `quit` | inline | certain | `WM_CLOSE`, or launches another program if string 0x77 is set |
-| 0E | 4 | | 1008:AA96 | probable | A_037 (audio); not used by Upsy |
-| 0F | 8 | `wavestop` | 1008:AAAA | certain | **stops** wave `+2` (0 = all), `+4` fade in ms (always 0 in Upsy); no notification; ported |
+| 0E | 4 | `cdstop` | 1008:AA96 | certain | if `DAT_5B6E` (CD open): A_037 stops the CD; never set without a CD, so nothing happens; ported |
+| 0F | 8 | `wavestop` | 1008:AAAA | certain | **stops** wave `+2` (0 = all; a wave not loaded is left alone), `+4` dword fade in ms (A_039); no notification, the delayed restart is cancelled. One wave with a fade: its level falls to 0 in ms and it plays on **silent** up to its natural end (keeping priority and exclusivity). All waves with a fade: the **device** volume falls in 200 ms steps, then every wave stops and the volume comes back; ported ([AUDIO.md](AUDIO.md)) |
 | 10 | 24 | `calc` | 1008:9E06 | certain | **arithmetic** `{variable, n, n ≤ 3 × {operand, operation (byte), negate (byte)}}`: in order `var = var op x` (FUN_1008_8D2C) with 0 assigns, 1 +, 2 −, 3 ×, 4 rounded division, 5 \|, 6 &, 7 %; ported |
 | 11 | 14 | `ifcall` | 1008:97EE | certain | if (+8 OP +10, operator +12 as in 0x26) runs script +2, otherwise (if flag +6) script +4; script 0 = ends the current script |
-| 12 | 20 | `link` | 1008:9224 | certain | library change: +2 file name (16 characters), +0x12 stop audio, +0x13 go back to the previous library; happens after the script, from the message loop (message 0x4C9) |
+| 12 | 20 | `link` | 1008:9224 | certain | library change: +2 file name (16 characters), +0x12 stop audio, +0x13 go back to the previous library; happens after the script, from the message loop (message 0x4C9). At once: pending wave end notifications cancelled (A_008); with +0x12 the default sound/music of the background sprite (byte +0x14) is no longer kept by the library change (FUN_1008_7372, [AUDIO.md](AUDIO.md)) |
 | 13 | 12 | `timer` | 1008:DD20 | certain | **named timer** `{id, script, ms (dword), variable, repeat}`: id = raw word; with `+10` the duration is the operand at `+6`; `+11` repeat; at most 20 (error 0x74); same id = re-armed; checked at every tick of the loop (1008:DED8), the script runs immediately; ported |
 | 14 | 6 | `stoptimer` | 1008:DCAC | certain | removes the timer with id `+2` (**raw** word, as in 0x13: not an operand to decode); flag `+4` = all; ported (`rt_stop_timer`) |
 | 15 | 4 | | inline | certain | sets `DAT_1502` (+ message 0x4C8 to the window) |
@@ -156,8 +156,8 @@ Lengths in bytes (L). "var" = length held in a word of the instruction.
 | 51 | 4 | `midistop` | 1008:A4C4 | certain | stops MIDI `+2` (0 = the current one), without notification; ported |
 | 52..58 | 6..16 | | 1008:4F0A..5558 | certain | **player controllers** (section "Player controllers"): **53** selects/turns on/suspends the device of a player and **54** sets the events script (ported); 52/55 key sequences and the others not used by the games |
 | 59 | var | `return` | `Script_EvalExpr` | certain | return value, end of the script |
-| 5C | 14 | | 1008:9EAC | probable | MIDI messages (A_032) |
-| 5D | 4 | `volume` | 1008:A32A | certain | device volume one step up (`+2` ≠ 0) or down: `+3` 0 all, 1 wave, 2 MIDI, 3 auxiliary (CD); 32 levels (`>> 11` of the Windows volume, FUN_1008_8CBE); ported |
+| 5C | 14 | `midiparams` | 1008:9EAC | certain | A_032 on MIDI `+2` (loaded first): `+5` ≠ 0 sets the tempo, every delay becomes `delay × mult / div` with `+0xA` = divisor and `+0xC` = multiplier (operands; divisor 0 = unscaled; 3 ms minimum after scaling); `+4` ≠ 0 sets the channel mute flags: for each bit of the mask `+6` the channel takes the bit of `+8`, a channel that becomes muted gets All Notes Off (CC 0x7B), then its note-ons are dropped. Kept by the MIDI event until it is unloaded; ported ([AUDIO.md](AUDIO.md)) |
+| 5D | 4 | `volume` | 1008:A32A | certain | device volume one step up (`+2` ≠ 0) or down: `+3` 0 all, **1 CD (AUX)**, **2 MIDI**, **3 wave**; 32 levels (`>> 11` of the Windows volume, FUN_1008_8CBE), written to `[audio]` MidiVolume / WaveVolume. Without a CD AUX device device 1 does nothing (A_017 reads 0, A_031 fails, CdVolume not written); ported |
 | 5E | 6 | | 1010:1F58 | probable | `{type-18 text, word}`: changes the text color (record+4) and redraws; not used by the present games, not ported |
 | 60, 61 | 4, 12 | `palette?` | 1008:0770 / 067C | probable | palette animation (S_005 → `ANIMATEPALETTE`) |
 | 6A | 4 | | inline | certain | enables the debug hook (`DAT_40DC`) |
@@ -176,8 +176,8 @@ in `port\src\rt.c`):
 - **translated to inline C by `scr2c`**: 01 02 03 05 0A 0B 0D 11 12 14 15 16 17 1B 1D 1F 22 23 25
   26 2B 2C 2D 38 3B 3C 40 48 49 4C 4D 4E 4F 59 6A 71 77 8D 8F (flow control, calls,
   expressions, engine variables, INI, cursor, fade, timers);
-- **handled by `rt_op`** (30 opcodes): 04 06 07 08 0C 0F 10 13 18 19 1C 1E 21 24 28 29 2E 2F 35
-  36 37 3F 44 47 4B 50 51 53 54 5D;
+- **handled by `rt_op`** (33 opcodes): 04 06 07 08 09 0C 0E 0F 10 13 18 19 1C 1E 21 24 28 29 2E 2F
+  35 36 37 3F 44 47 4B 50 51 53 54 5C 5D;
 - **not ported**: all the others. `scr2c` emits them anyway as a call to `rt_op`; the final branch
   of `rt_op` increments `unimpl_op[op]`, writes `?? op XX not yet ported` into the
   trace and **continues**: the instruction is silently ignored (hence the idea of making the
@@ -187,7 +187,6 @@ in `port\src\rt.c`):
 
 | Opcode | Mnemonic / meaning | Notes |
 |---|---|---|
-| 09, 0E | audio A_027 / A_037 | not used |
 | 1A | like 05 if the object is active | |
 | 20 | if the resource is active, runs script +4 | pinball |
 | 27 | `FILLRECT` | |
@@ -202,7 +201,6 @@ in `port\src\rt.c`):
 | 41, 42 | `cos`, `sin` | |
 | 43 | `WRITEPRIVATEPROFILESTRING` | pinball |
 | 52, 55, 56, 57, 58 | controller: key sequences, mirror, state reading (53 and 54 are ported) | |
-| 5C | MIDI messages (A_032) | |
 | 5E | text color (type 18) | |
 | 60, 61 | animated palette (`ANIMATEPALETTE`) | |
 
@@ -292,19 +290,23 @@ menu draws its own cursor as a sprite. In the port: system cursor always visible
 
 ## Audio (TOPSYA01, ported in `rt.c` "sounds" + `audio.c`)
 
-One **sound event** per resource: a new `08` on the same wave restarts it. At the end of the sound,
-if the "notify" flag is on, the DLL sends the window message **0x52C** `{sound, script}`
-(FUN_1000_19E6 for MIDI, wave loop at 1000:28xx); the WndProc (1008:ED3C) puts the script
-in the **deferred call queue** with the sound as argument (like opcode 1E) or, with
-script 0, **unloads** the sound. Explicit stop (0F, 51, new 50) does not notify. The moment
-of the end is computed from the duration (FUN_1000_37EE: size / frequency), × (repetitions + 1);
-the port does the same, so notifications arrive even without an audio device or without a SoundFont.
-On library change (FUN_1008_C5F8) the resources are unloaded, pending 0x52Cs removed and
-pauses zeroed (A_041): the port stops all sounds. Example: in TOPSOPN2 wave 5869 notifies
-script 23, which does the `link` to the menu (end of the introduction).
+Full model in [AUDIO.md](AUDIO.md). One **sound event** per resource: a new `08` on the same wave
+restarts it. At the end of the sound, if the "notify" flag is on, the DLL sends the window message
+**0x52C** `{sound, script}` (FUN_1000_19E6 for MIDI, A_004 for waves); the WndProc (1008:ED3C)
+puts the script in the **deferred call queue** with the sound as argument (like opcode 1E) or,
+with script 0, **unloads** the sound. Explicit stop (0F, 51, new 50), a wave cut by an exclusive
+wave and a wave refused by the priority gate do not notify. The moment of the end is computed
+from the duration (FUN_1000_37EE: size / frequency), × (repetitions + 1); the port does the same,
+so notifications arrive even without an audio device or without a SoundFont. On library change
+(FUN_1008_C5F8) the resources are unloaded, pending 0x52Cs removed and pauses zeroed (A_041):
+the port stops all sounds except the default sound/music of a background sprite. Example: in
+TOPSOPN2 wave 5869 notifies script 23, which does the `link` to the menu (end of the
+introduction).
 
-Not ported (not used by Upsy): fades and delay of 08/0F, opcodes 09, 0E, 35, 5C, builtin
-97 (script at the start of each wave, `DAT_1540`).
+Waves have a **priority** (header +8, signed) and an **overlay** flag (header +5): a wave without
+overlay cuts every other non-overlay wave when it starts; a start whose priority is lower than the
+current one is refused while the device is busy (Upsy: e.g. TOPSMAIN wave 8748, priority 1, is
+refused while the overlay wave 8815, priority 10, is in its first pass).
 
 ## Player controllers
 
@@ -403,7 +405,7 @@ direction "mirror" (52D0, table DS:0022), 5190, builtin 82.
 | 6E | `{flag}`: `DAT_5B7E`, alternative joystick reading (FUN_1008_575C: only the dominant direction, threshold 8000); ported | certain |
 | 79 | `{high, low, &high, &low}`: sum on a base-10000 number held in two words (`*&high·10000 + *&low += high·10000 + low`, with carry; CRT 1018:05EE/0554/0620); scores of TOPSMAIN; ported | certain |
 | 73 | `{&x, &y, step, steps, x0, y0, xm, ym, x1, y1}`: point of the **parabola** through (x0,y0) at the start, (xm,ym) in the middle and (x1,y1) at the end, at step `step` of `steps` (S_074 → TOPSYS01 1000:1758, integer arithmetic in 1/1024; the same curve as animation command 05); with `steps` = 0 the variables stay unchanged; ported | certain |
-| 70 | pause (1) / resume (0) of all audio (A_042: wave and music); ported | certain |
+| 70 | pause (1) / resume (0) of all audio (A_042: waveOutPause / waveOutRestart and A_025 on the music, only when the flag changes); ported | certain |
 | 7C | `COLLIDE` (collision) | certain |
 | 7E | `DISTANCE` | certain |
 | 7F | `REFLECTANGLE` | certain |
@@ -412,7 +414,7 @@ direction "mirror" (52D0, table DS:0022), 5190, builtin 82.
 | 90 | `GETVERSION`: 0x1F (0x5F with Windows 95); ported (Windows 3.1: 0x1F) | certain |
 | 93 | **inactivity timeout** `(script, seconds)` (`DAT_150C`, 16-bit interval = seconds × 1000): input re-arms it, on expiry the script is queued (FUN_1008_DEAA); it is not `TIMEGETTIME`; ported | certain |
 | 96 | launches a program (`WINEXEC`/`SHELLEXECUTE`) | certain |
-| 99 | pause (1) / resume (0) of the music with a counter (A_025); ported | certain |
+| 99 | pause (1) / resume (0) of the music with a counter (A_025): the first pause sends All Notes Off on the 16 channels and holds the sequence, the last resume continues it at once (the rest of the interrupted delay is lost); ported | certain |
 | 5A, 5B | animation command built by the script `{sprite, command, values...}`: 5A immediate (empties the command buffer), 5B queued (S_066/S_068 -> FUN_1000_59F6) | certain, ported (`spr_command`) |
 
 ### Other ported builtins (`rt_builtin`)
@@ -427,6 +429,7 @@ is called by the C generated by `scr2c` (`port\game\*.c`).
 | 88 | `{a, b}` | signed maximum | 1008:1002 (then 1F28) | ported |
 | 8C | – | `DAT_10DE` = free memory (high word of `GetFreeSpace`, 64 KB units); the startup scripts compare it with 53 and 106 to choose the detail level | 1008:1002; written in `FUN_1000_04B0` | ported: always returns 0x7FFF (maximum) |
 | 90 | – | `GETVERSION`: the original returns 0x5F if the high byte (minor version) is `_` (0x5F, Windows 95), otherwise 0x1F | 1008:1002 | ported: 0x1F like Windows 3.1 |
+| 97 | `{script}` | `DAT_1540` = script (0 = none, reset when a library opens): after every opcode 08 (started or refused by the priority gate) the script is queued with the wave operand as argument. The decompiled code shows `DAT_0E36` (audio context) as the queued script: a register mix-up, `DAT_1540` is assumed; returns the argument (not popped) | 1008:1002, 1008:8EAC | ported |
 | 9A | `{value}` | `DAT_5B92 = value` (1 at startup, `FUN_1000_05E4`): if it is on and Ctrl+Shift are pressed, mouse and keyboard messages (1008:35B2, 383A, 3B3C, 3CEA) take the hidden path of dragging with screen capture (a hidden debugging feature of the original); TOPSCRED turns it off with 0; no return value | 1008:1002 | partly ported: returns the argument, without storing it (the hidden function does not exist in the port) |
 
 ### Builtins of the original NOT ported
@@ -468,7 +471,6 @@ returns 0. None is used by Upsy and Outwords. Descriptions are inferred from the
 | 94 | 3 | `{type-1 bitmap, string, UINT}`: creates the image from a file/icon and draws it into the resource (FUN_1008_87D0 → S_019), returns 0/1; to be analyzed |
 | 95 | 1 | writes a default guest name into the string variable |
 | 96 | 1-3 | `WINEXEC` of the program (string), or FUN_1008_DB8C with a final script; returns 1 on success (the table above described it as "launches a program") |
-| 97 | 1 | `DAT_1540` = script run at the start of every wave |
 | 98 | 2 | `S_085` (TOPSYS01) |
 | 9B | 3 | stub: zeroes the first byte of the destination string (FUN_1008_B298) |
 | 9C | 3 | empty stub (FUN_1008_B2B0) |

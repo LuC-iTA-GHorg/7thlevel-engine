@@ -55,7 +55,7 @@ static long play_next_wave(Viewer *vw)
 {
 	for (uint32_t k = 1; k <= vw->lb.n_entries; k++) {
 		uint32_t i = (vw->wave + k) % vw->lb.n_entries;
-		if (lb7_entry(&vw->lb, i).type == LB7_T_WAVE && audio_play_wave(&vw->lb, i, 0, 256)) {
+		if (lb7_entry(&vw->lb, i).type == LB7_T_WAVE && audio_play_wave(&vw->lb, i, 0)) {
 			vw->wave = i;
 			return i;
 		}
@@ -68,7 +68,7 @@ static long play_next_midi(Viewer *vw)
 {
 	for (uint32_t k = 1; k <= vw->lb.n_entries; k++) {
 		uint32_t i = (vw->midi + k) % vw->lb.n_entries;
-		if (lb7_entry(&vw->lb, i).type == LB7_T_MIDI && audio_play_midi(&vw->lb, i, 0)) {
+		if (lb7_entry(&vw->lb, i).type == LB7_T_MIDI && audio_play_midi(&vw->lb, i, 0, 0, 0, 0)) {
 			vw->midi = i;
 			return i;
 		}
@@ -106,7 +106,7 @@ static int load_soundfont(const char *sf2)
 static int mixdown(const Lb7 *lb, uint32_t entry, const char *path)
 {
 	int is_midi = lb7_entry(lb, entry).type == LB7_T_MIDI;
-	int id = is_midi ? audio_play_midi(lb, entry, 0) : audio_play_wave(lb, entry, 0, 256);
+	int id = is_midi ? audio_play_midi(lb, entry, 0, 0, 0, 0) : audio_play_wave(lb, entry, 0);
 	if (!id)
 		return 0;
 	FILE *f = fopen(path, "wb");

@@ -24,7 +24,13 @@ static LibState *states;
 static void run_timers(Rt *rt);
 static void check_hits(Rt *rt);
 static void pad_timers(Rt *rt);
-static void sound_reset(Rt *rt);
+static void sound_library_close(Rt *rt);
+static void sound_deactivate(Rt *rt);
+static void wave_unload(Rt *rt, unsigned res);
+static void midi_unload(Rt *rt, unsigned res);
+static void sprite_members_unload(Rt *rt, unsigned sprite);
+static void default_teardown(Rt *rt, int flag);
+static void waves_freeze(Rt *rt);
 static void sound_check(Rt *rt);
 static char *str_dest(Rt *rt, unsigned id);
 static void queue_call(Rt *rt, uint16_t script, uint16_t a1, uint16_t a2);
@@ -84,6 +90,7 @@ int rt_init(Rt *rt, const char *dir, FILE *trace)
 	rt->screen_w = 640;
 	rt->screen_h = 480;
 	rt->vol_wave = rt->vol_midi = 31;
+	rt->wave_hwvol = 31 * 0x842;
 	rt->faded = 1; /* DAT_5B6D = 1 at initialization: the first start does a fade in */
 	rt->active = rt->active_audio = 1;
 	rt->max_joy = 2;
@@ -212,7 +219,7 @@ int rt_open_library(Rt *rt, const char *file)
 	/* C474 turns off the use of keyboard and mouse as controllers; the DS:44EA records remain */
 	rt->pad_kbd = rt->pad_mouse = rt->pad_joy = 0;
 	rt->joy_alt = 0;
-	sound_reset(rt);  /* FUN_1008_C5F8: resources unloaded, pending 0x52C removed, A_041 */
+	sound_library_close(rt); /* FUN_1008_C5F8: resources unloaded, pending 0x52C removed, A_041 */
 	/* sprite input data: the library reopens the resources, hence the values from the file */
 	free(rt->obj);
 	rt->n_obj = rt->lib.n_entries + rt->lib.extra_slots; /* including the copies created at runtime */
@@ -431,23 +438,20 @@ int rt_unload(Rt *rt, unsigned id)
 {
 	unsigned type = lb7_entry(&rt->lib, id).type;
 	tr(rt, "   unload %u (type %u)\n", id, type);
-	if (type == 17 && rt->spr)
+	if (type == 17 && rt->spr) {
+		int loaded = spr_loaded(rt->spr, id);
 		spr_unload(rt->spr, id);
+		if (loaded) /* FUN_1008_6442 -> 6502: the members are unloaded too */
+			sprite_members_unload(rt, id);
+	}
 	if (type == 1 && rt->spr) /* the bitmap's memory is freed: changes by builtin 7D are lost */
 		spr_bitmap_forget(rt->spr, id);
-	/* unloading a sound stops it (FUN_1008_722A): TOPSFINA wave 59 loops until
-	   script 52 unloads it */
-	if (type == LB7_T_WAVE) {
-		for (int i = 0; i < 16; i++)
-			if (rt->snd[i].res == id) {
-				audio_stop(rt->snd[i].voice);
-				memset(&rt->snd[i], 0, sizeof(rt->snd[i]));
-			}
-	}
-	else if (type == LB7_T_MIDI && rt->music.res == id) {
-		audio_stop_midi();
-		memset(&rt->music, 0, sizeof(rt->music));
-	}
+	/* unloading a sound destroys its event, which stops it (FUN_1008_722A -> 66CE / 6334):
+	   TOPSFINA wave 59 loops until script 52 unloads it */
+	if (type == LB7_T_WAVE)
+		wave_unload(rt, id);
+	else if (type == LB7_T_MIDI)
+		midi_unload(rt, id);
 	return 1;
 }
 
@@ -467,6 +471,13 @@ void rt_link(Rt *rt, const char *file, int stop_audio, int ret)
 	rt->link_stop_audio = stop_audio;
 	rt->link_return = ret;
 	rt->link_pending = 1;
+	/* FUN_1008_9224: byte +0x12 -> FUN_1008_7372(DAT_5B76) (default sound and music of a previous
+	   library destroyed, the current ones are no longer kept by the library change); then
+	   A_008: no pending wave end notification survives the link */
+	if (stop_audio)
+		default_teardown(rt, rt->def_old);
+	for (unsigned i = 0; i < sizeof(rt->waves) / sizeof(rt->waves[0]); i++)
+		rt->waves[i].notify = 0;
 }
 
 void rt_quit(Rt *rt)
@@ -1027,8 +1038,9 @@ void rt_set_active(Rt *rt, int a)
 		tr(rt, "-- window %s\n", a ? "active" : "inactive");
 		pads_hold(rt, !a);
 		if (rt->code && !a) /* A_005(0): CD, MIDI and wave stopped and closed, no end notifications */
-			sound_reset(rt);
+			sound_deactivate(rt);
 		rt->active_audio = (uint8_t)a;
+		waves_freeze(rt); /* FUN_1000_3D50: the wave events are mixed only while active */
 		if (!a)
 			rt->drag_sprite = 0; /* FUN_1008_3900: drag cancelled */
 	}
@@ -1066,6 +1078,17 @@ void rt_load_settings(Rt *rt)
 	if (ini_get(rt, "audio", "MidiVolume", buf, sizeof(buf))) {
 		rt->vol_midi = vol_from_ini(atoi(buf), 1);
 		found = 1;
+	}
+	/* other [audio] keys of TOPSYA01 (FUN_1000_0CB8). CdVolume (no CD), WaveFormatMask (SDL
+	   converts any format), ProfileCD (MCI CD timing) and MaxWaveBuffers (waveOut queue length)
+	   have no equivalent in the port. */
+	if (ini_get(rt, "audio", "DisableWaveVolume", buf, sizeof(buf)) && atoi(buf)) {
+		rt->no_wave_volume = 1; /* FUN_1000_35BA: waveOutSetVolume never called */
+		found = 1;
+	}
+	if (ini_get(rt, "audio", "RemapMidiDrums", buf, sizeof(buf)) && atoi(buf)) {
+		audio_midi_remap_drums(1); /* FUN_1000_1BB8: channel 10 messages sent on channel 16 */
+		tr(rt, "settings: RemapMidiDrums 1\n");
 	}
 	if (found)
 		apply_volume(rt);
@@ -1851,119 +1874,638 @@ static void op_timer(Rt *rt, int16_t *l, const uint8_t *b)
 
 /* ---------------------------------------------------------------- sounds */
 
-static struct RtSound *wave_slot(Rt *rt, unsigned res)
+/* Model of TOPSYA01 (docs\AUDIO.md). Every wave resource has at most one "wave event"
+ * (struct RtWave, created at the first opcode 08, freed when the resource is unloaded); the
+ * device has a current priority (ctx+0x40) and a "buffers queued" state (ctx+0xC) that gate
+ * the starts. A_004 (the periodic service, called by the sprite loop) is sound_check. */
+
+#define N_WAVES ((int)(sizeof(((Rt *)0)->waves) / sizeof(((Rt *)0)->waves[0])))
+#define N_MIDI_EV ((int)(sizeof(((Rt *)0)->midi_ev) / sizeof(((Rt *)0)->midi_ev[0])))
+
+static void wave_service(Rt *rt);
+static void waves_freeze(Rt *rt);
+
+/* Event of resource res (movie audio and default sounds left by a link are not found). */
+static struct RtWave *wave_find(Rt *rt, unsigned res)
 {
-	for (int i = 0; i < 16; i++)
-		if (rt->snd[i].res == res)
-			return &rt->snd[i];
+	for (int i = 0; i < N_WAVES; i++) {
+		struct RtWave *w = &rt->waves[i];
+		if (w->used && !w->movie && !w->orphan && w->res == res)
+			return w;
+	}
 	return NULL;
 }
 
-static void wave_stop(struct RtSound *w)
+static struct RtWave *wave_free_slot(Rt *rt)
 {
-	if (w->voice)
-		audio_stop(w->voice);
+	for (int i = 0; i < N_WAVES; i++)
+		if (!rt->waves[i].used)
+			return &rt->waves[i];
+	return NULL;
+}
+
+/* Wave_InitFromHeader (1000:2786): level and volume 16, priority +8, overlay +5. */
+static void wave_init(struct RtWave *w, const Lb7Wave *h, int voice)
+{
+	memset(w, 0, sizeof(*w));
+	w->used = 1;
+	w->voice = voice;
+	w->prio = h->prio;
+	w->overlay = h->overlay != 0;
+	w->vol = AUDIO_LEVEL_FULL;
+	w->rate = h->rate;
+	w->channels = h->channels;
+}
+
+/* A_011 through FUN_1008_740E(9): the event of the resource, created if needed. NULL = no event
+ * (at most 100, FUN_1000_267C; or data not decodable): FUN_1008_74FA reports "not loaded". */
+static struct RtWave *wave_event(Rt *rt, unsigned res)
+{
+	struct RtWave *w = wave_find(rt, res);
+	if (w)
+		return w;
+	Lb7Entry e = lb7_entry(&rt->lib, res);
+	const uint8_t *d = e.type == LB7_T_WAVE ? lb7_entry_data(&rt->lib, e) : NULL;
+	Lb7Wave h;
+	if (!d || !lb7_wave_header(d, e.size, &h) || !(w = wave_free_slot(rt)))
+		return NULL;
+	int v = audio_wave_create(&rt->lib, res);
+	if (!v)
+		return NULL;
+	wave_init(w, &h, v);
+	w->res = (uint16_t)res;
+	w->pass_ms = audio_wave_duration_ms(&rt->lib, res);
+	w->values = (uint32_t)(lb7_wave_pcm_size(&h) / (h.adpcm || h.bits == 16 ? 2u : 1u));
+	return w;
+}
+
+/* FUN_1000_3600: waveOutReset of the queued buffers (only if there are any): the new sound is
+ * heard at once and the current priority goes back to 0. */
+static void wave_flush(Rt *rt)
+{
+	if (rt->wave_queued) {
+		rt->wave_queued = 0;
+		rt->wave_prio = 0;
+	}
+}
+
+static void wave_halt(struct RtWave *w)
+{
+	w->playing = 0;
+	audio_wave_halt(w->voice);
+}
+
+/* A_013 (FUN_1000_26CE): the event is destroyed; a playing wave stops, without notification. */
+static void wave_destroy(Rt *rt, struct RtWave *w)
+{
+	if (w->playing)
+		wave_flush(rt);
+	audio_wave_destroy(w->voice);
 	memset(w, 0, sizeof(*w));
 }
 
-/* Library closed: all sounds stop without notifications, library pauses and volumes reset. */
-static void sound_reset(Rt *rt)
+/* Expected end after loops repeats (-1 = never): 0 = does not end. While the waves (or the
+ * music) are paused the clock starts at the resume, which shifts the ends by the pause. */
+static uint32_t sound_end_ms(Rt *rt, uint32_t dur, int loops, int paused, uint32_t paused_at)
 {
-	for (int i = 0; i < 16; i++)
-		wave_stop(&rt->snd[i]);
+	if (loops < 0)
+		return 0;
+	uint32_t t = (paused ? paused_at : rt->now_ms) + dur * (uint32_t)(loops + 1);
+	return t ? t : 1;
+}
+
+/* Sample values of ms milliseconds (FUN_1000_384A/38BA: ms * nAvgBytesPerSec / 1000, halved on a
+ * 16-bit device; 32-bit arithmetic as in the original). The port mixes at 16 bit. */
+static uint32_t wave_values(const struct RtWave *w, uint32_t ms)
+{
+	return (uint32_t)(ms * (w->rate * w->channels * 2u)) / 1000u / 2u;
+}
+
+/* FUN_1000_3D16: the wave plays (from the start: FUN_1000_2DC4 is always called before). */
+static void wave_play(Rt *rt, struct RtWave *w)
+{
+	if (!w->overlay || w->prio)
+		rt->wave_prio = w->prio;
+	w->playing = 1;
+	audio_wave_start(w->voice, w->loops);
+	w->end_ms = sound_end_ms(rt, w->pass_ms, w->loops, rt->waves_frozen, rt->waves_paused_at);
+}
+
+static void wave_trace_name(const Rt *rt, const struct RtWave *w, char *buf, size_t cap)
+{
+	(void)rt;
+	if (w->movie)
+		snprintf(buf, cap, "movie audio");
+	else
+		snprintf(buf, cap, "wave %u%s", w->res, w->orphan ? " (left by a link)" : "");
+}
+
+/* FUN_1000_3C6E: a non-overlay wave starts: every other playing non-overlay wave stops at
+ * once, without end notification (and without its pending delayed start). */
+static void wave_kill_others(Rt *rt, struct RtWave *self)
+{
+	for (int i = 0; i < N_WAVES; i++) {
+		struct RtWave *w = &rt->waves[i];
+		if (!w->used || !w->playing || w->overlay || w == self)
+			continue;
+		char a[48], b[48];
+		wave_trace_name(rt, w, a, sizeof(a));
+		wave_trace_name(rt, self, b, sizeof(b));
+		tr(rt, "   %s cut by %s (exclusive, no notification)\n", a, b);
+		wave_halt(w);
+		w->delay = 0;
+	}
+	rt->wave_prio = 0;
+}
+
+/* FUN_1000_3A20: delayed start in now + whole seconds (random between min and max). */
+static void wave_delay_arm(Rt *rt, struct RtWave *w)
+{
+	unsigned s = w->dmin;
+	if (w->drange) { /* rand() of the DLL (FUN_1000_4348, MS CRT), seeded once (FUN_1000_4330) */
+		if (!rt->a_seeded) {
+			rt->a_seed = (uint16_t)rt->rand_seed; /* the original seeds with timeGetTime() */
+			rt->a_seeded = 1;
+		}
+		rt->a_seed = rt->a_seed * 0x343FDu + 0x269EC3u;
+		unsigned r = (rt->a_seed >> 16) & 0x7FFF;
+		s = (uint8_t)((r & 0xFF) % w->drange + w->dmin);
+	}
+	w->delay_due = rt->now_ms + s * 1000u;
+}
+
+/* Device volume (waveOutSetVolume, FUN_1000_35BA): not applied with DisableWaveVolume. */
+static void wave_hw_apply(Rt *rt)
+{
+	audio_set_wave_volume(rt->no_wave_volume ? 256 : (int)(((uint32_t)rt->wave_hwvol * 256u + 0x7FFFu) / 0xFFFFu));
+}
+
+/* A new start during the "stop all" fade cancels it and restores the volume (FUN_1000_3ADA). */
+static void wave_fade_cancel(Rt *rt)
+{
+	if (!rt->wave_fade.on)
+		return;
+	rt->wave_fade.on = 0;
+	rt->wave_hwvol = rt->wave_fade.start;
+	wave_hw_apply(rt);
+}
+
+/* A_029 -> FUN_1000_3ADA. blk = parameter block of opcode 08 (24 bytes from +4) or NULL (all 0,
+ * movie audio): +0 repeats, +2 set volume, +3 notify, +4 no flush, +5 volume, +6 fade-in ms,
+ * +0xA fade-out ms, +0xE / +0x12 start delay min / max ms. script = end-of-sound script. */
+static void wave_start(Rt *rt, struct RtWave *w, const uint8_t *blk, uint16_t script)
+{
+	static const uint8_t zero[0x18];
+	char name[48];
+	wave_trace_name(rt, w, name, sizeof(name));
+	if (!blk)
+		blk = zero;
+	/* start gate: overlay waves with priority 0 always, otherwise only with the device idle or
+	   with a priority not lower than the current one (signed); a refused start leaves no trace */
+	if (!(w->overlay && w->prio == 0) && rt->wave_queued && rt->wave_prio > w->prio) {
+		tr(rt, "   %s: not started (priority %d < current %d, no notification)\n", name, w->prio, rt->wave_prio);
+		return;
+	}
+	int loops = (int16_t)lb7_rd16(blk);
+	uint32_t fin_ms = lb7_rd32(blk + 6), fout_ms = lb7_rd32(blk + 0xA);
+	uint32_t dmin_ms = lb7_rd32(blk + 0xE), dmax_ms = lb7_rd32(blk + 0x12);
+	audio_wave_fades_off(w->voice);
+	if (blk[2]) /* W+0x81: kept for the next plays; not clamped (A_035 clamps to 16) */
+		w->vol = blk[5];
+	audio_wave_set_level(w->voice, w->vol, w->vol);
+	w->loops = loops;
+	wave_fade_cancel(rt);
+	/* fades, in sample values (FUN_1000_384A / 38BA) */
+	uint32_t fin_iv = 0;
+	if (fin_ms && w->vol) {
+		fin_iv = wave_values(w, fin_ms) / w->vol;
+		audio_wave_fade_in(w->voice, fin_iv);
+	}
+	if (fout_ms && w->vol && loops >= 0) { /* at the end of the last pass: first step delayed */
+		uint32_t s = wave_values(w, fout_ms), iv = s / (w->vol + 1u), delay = 0;
+		uint32_t total = w->values * (uint32_t)(loops + 1);
+		if (fin_iv)
+			total -= w->vol * fin_iv;
+		if (s <= total)
+			delay = total - s;
+		audio_wave_fade_out(w->voice, iv, delay);
+	}
+	w->delay = 0;
+	if (dmin_ms) { /* FUN_1000_3A60: no exclusivity, flush, priority or notification now */
+		w->delay = 1;
+		if (w->playing)
+			wave_halt(w);
+		uint8_t smin = (uint8_t)(dmin_ms / 1000u), smax = (uint8_t)(dmax_ms / 1000u);
+		w->dmin = smin;
+		w->drange = smin < smax ? (uint8_t)(smax - smin + 1) : 0;
+		wave_delay_arm(rt, w);
+		tr(rt, "   %s (repeats %d, start delayed %u s, then again after every end)\n", name, loops,
+			(w->delay_due - rt->now_ms) / 1000u);
+		return;
+	}
+	if (!w->overlay)
+		wave_kill_others(rt, w);
+	if (rt->wave_queued && !blk[4])
+		wave_flush(rt);
+	wave_play(rt, w);
+	w->notify = blk[3] != 0;
+	w->script = w->notify ? script : 0;
+	w->prio_until = rt->now_ms + w->pass_ms; /* FUN_1000_37EE: one pass */
+	if (!w->prio_until)
+		w->prio_until = 1;
+	if (w->movie)
+		tr(rt, "   %s (priority %d%s)\n", name, w->prio, w->overlay ? ", overlay" : "");
+	else
+		tr(rt, "   %s (repeats %d%s)\n", name, loops, w->notify ? ", notify at end" : "");
+}
+
+/* A_039 on one wave (FUN_1000_3CB6): notification and delayed start cancelled; with a duration
+ * the level falls to 0 in ms (FUN_1000_38BA) and the wave goes on silent up to its natural end
+ * (the DLL does not stop it: it keeps its priority and exclusivity); otherwise it stops at once. */
+static int wave_stop(Rt *rt, struct RtWave *w, uint32_t ms)
+{
+	w->notify = 0;
+	w->delay = 0;
+	if (!w->playing)
+		return 0;
+	int lvl = ms ? (uint8_t)audio_wave_level(w->voice) : 0;
+	if (!ms || !lvl) {
+		wave_halt(w); /* FUN_1000_3D9E: nothing is pending, so no notification */
+		wave_flush(rt);
+	}
+	else {
+		uint32_t iv = wave_values(w, ms) / (uint32_t)(lvl + 1);
+		audio_wave_fade_out(w->voice, iv, 0); /* iv 0 (very short ms): no fade, keeps playing */
+		char name[48];
+		wave_trace_name(rt, w, name, sizeof(name));
+		tr(rt, "   %s: fade out in %u ms, then silent up to its end\n", name, ms);
+	}
+	return 1; /* the caller runs A_004 (wave_service) */
+}
+
+/* All the waves stopped at once, without notifications (FUN_1000_3DE8 with NULL). */
+static void wave_stop_all_now(Rt *rt)
+{
+	wave_flush(rt);
+	for (int i = 0; i < N_WAVES; i++)
+		if (rt->waves[i].used)
+			(void)wave_stop(rt, &rt->waves[i], 0);
+}
+
+/* A_039 with wave 0 (FUN_1000_3DE8): without duration everything stops at once; with a
+ * duration the DEVICE volume falls in steps of 200 ms (FUN_1000_3472, 5 steps per second) and
+ * at the end every wave stops and the volume comes back. Ignored while such a fade runs;
+ * fewer than one step: the device volume goes to 0 and nothing else happens (as the original). */
+static void wave_stop_all(Rt *rt, uint32_t ms)
+{
+	if (!ms) {
+		wave_stop_all_now(rt);
+		return;
+	}
+	if (rt->wave_fade.on)
+		return;
+	uint16_t steps = (uint16_t)((uint32_t)(ms * 5u) / 1000u);
+	if (!steps) {
+		tr(rt, "   stop all waves: fade of %u ms shorter than one step: wave volume 0\n", ms);
+		rt->wave_hwvol = 0;
+		wave_hw_apply(rt);
+		return;
+	}
+	rt->wave_fade.on = 1;
+	rt->wave_fade.steps = steps;
+	rt->wave_fade.start = rt->wave_fade.vol = rt->wave_hwvol;
+	rt->wave_fade.delta = (int)(((uint32_t)rt->wave_hwvol + steps / 2u) / steps);
+	rt->wave_fade.next = rt->now_ms + 200;
+	tr(rt, "   stop all waves: device fade out in %u steps of 200 ms\n", (unsigned)steps);
+}
+
+/* Destroys the event of wave res, if any (FUN_1008_66CE -> A_013). */
+static void wave_unload(Rt *rt, unsigned res)
+{
+	struct RtWave *w = wave_find(rt, res);
+	if (w)
+		wave_destroy(rt, w);
+	if (rt->def_wave == res)
+		rt->def_wave = 0;
+}
+
+static struct RtMidiEv *midi_ev_of(Rt *rt, unsigned res, int create);
+
+/* MIDI unloaded (FUN_1008_6334 -> A_012): stops it if it is the current one (no notification). */
+static void midi_unload(Rt *rt, unsigned res)
+{
+	if (rt->music.res == res && !rt->music.orphan) {
+		audio_stop_midi();
+		memset(&rt->music, 0, sizeof(rt->music));
+	}
+	for (int i = 0; i < N_MIDI_EV; i++)
+		if (rt->midi_ev[i].res == res)
+			memset(&rt->midi_ev[i], 0, sizeof(rt->midi_ev[i]));
+	if (rt->def_midi == res)
+		rt->def_midi = 0;
+}
+
+/* FUN_1008_7372(flag): with flag the default sound and music are destroyed (A_013 / A_012);
+ * the default variables are always cleared. */
+static void default_teardown(Rt *rt, int flag)
+{
+	if (flag) {
+		for (int i = 0; i < N_WAVES; i++) {
+			struct RtWave *w = &rt->waves[i];
+			if (w->used && (w->orphan || (!w->movie && rt->def_wave && w->res == rt->def_wave))) {
+				tr(rt, "   default sound %u destroyed\n", w->res);
+				wave_destroy(rt, w);
+			}
+		}
+		if (rt->music.res && (rt->music.orphan || rt->music.res == rt->def_midi)) {
+			tr(rt, "   default music %u stopped\n", rt->music.res);
+			audio_stop_midi();
+			memset(&rt->music, 0, sizeof(rt->music));
+		}
+	}
+	rt->def_sprite = rt->def_wave = rt->def_midi = 0;
+	rt->def_old = 0;
+}
+
+void rt_default_sprite(Rt *rt, unsigned sprite)
+{
+	default_teardown(rt, rt->def_old); /* FUN_1008_6BAA */
+	rt->def_sprite = (uint16_t)sprite;
+	Lb7Entry e = lb7_entry(&rt->lib, sprite);
+	const uint8_t *d = lb7_entry_data(&rt->lib, e);
+	unsigned n = d && e.size >= 0x16 ? lb7_rd16(d + 6) : 0;
+	for (unsigned k = 0; k < n && 0x16 + k * 2 + 2 <= e.size; k++) { /* FUN_1008_6D44: the last ones */
+		unsigned m = (uint16_t)(lb7_rd16(d + 0x16 + k * 2) - 0x8ACF);
+		unsigned t = lb7_entry(&rt->lib, m).type;
+		if (t == LB7_T_WAVE)
+			rt->def_wave = (uint16_t)m;
+		else if (t == LB7_T_MIDI)
+			rt->def_midi = (uint16_t)m;
+	}
+	tr(rt, "   default sprite %u (sound %u, music %u)\n", sprite, rt->def_wave, rt->def_midi);
+}
+
+/* Unload of a loaded sprite (FUN_1008_6442 -> 6502): its wave and MIDI members are unloaded,
+ * i.e. their events destroyed: their sound stops. No reference count for these types. */
+static void sprite_members_unload(Rt *rt, unsigned sprite)
+{
+	Lb7Entry e = lb7_entry(&rt->lib, sprite);
+	const uint8_t *d = lb7_entry_data(&rt->lib, e);
+	unsigned n = d && e.size >= 0x16 ? lb7_rd16(d + 6) : 0;
+	for (unsigned k = 0; k < n && 0x16 + k * 2 + 2 <= e.size; k++) {
+		unsigned m = (uint16_t)(lb7_rd16(d + 0x16 + k * 2) - 0x8ACF);
+		unsigned t = lb7_entry(&rt->lib, m).type;
+		if (t == LB7_T_WAVE) {
+			struct RtWave *w = wave_find(rt, m);
+			if (w && w->playing)
+				tr(rt, "   member wave %u of sprite %u unloaded: its sound stops\n", m, sprite);
+			wave_unload(rt, m);
+		}
+		else if (t == LB7_T_MIDI) {
+			if (rt->music.res == m && !rt->music.orphan)
+				tr(rt, "   member MIDI %u of sprite %u unloaded: the music stops\n", m, sprite);
+			midi_unload(rt, m);
+		}
+	}
+}
+
+/* Library closed (FUN_1008_C5F8): every resource unloaded (FUN_1008_72B0: wave and MIDI events
+ * destroyed without notifications, except the default sound and music, which keep playing),
+ * pending 0x52C removed, A_041 (current priority 0, pauses cleared). */
+static void sound_library_close(Rt *rt)
+{
+	for (int i = 0; i < N_WAVES; i++) {
+		struct RtWave *w = &rt->waves[i];
+		if (!w->used)
+			continue;
+		if (w->orphan || (!w->movie && rt->def_wave && w->res == rt->def_wave)) {
+			w->orphan = 1; /* DAT_0E40 skipped by the teardown (DAT_07F4) */
+			w->notify = 0;
+			continue;
+		}
+		wave_destroy(rt, w);
+	}
+	rt->def_wave = 0; /* the resource ids of the next library are other resources */
+	if (rt->music.res && (rt->music.orphan || rt->music.res == rt->def_midi))
+		rt->music.orphan = 1; /* DAT_0E42: the music goes on */
+	else {
+		if (rt->music.res)
+			audio_stop_midi();
+		memset(&rt->music, 0, sizeof(rt->music));
+	}
+	rt->def_midi = 0;
+	memset(rt->midi_ev, 0, sizeof(rt->midi_ev));
+	rt->wave_prio = 0; /* A_041 */
+	rt->wave_hook = 0; /* DAT_1540 = 0 in FUN_1008_C474 */
+	rt->def_old = 1;   /* DAT_5B76 */
+	if (rt->waves_paused) {
+		rt->waves_paused = 0;
+		waves_freeze(rt);
+	}
+	if (rt->midi_paused)
+		audio_pause_midi(0);
+	rt->midi_paused = 0;
+}
+
+/* A_005(0), window deactivated: FUN_1000_3426 stops every wave without notification and cancels
+ * the delayed starts; FUN_1000_171E closes the MIDI port and forgets the current sequence
+ * (FUN_1000_1CB2), so A_005(1) does not restart it (its restart branch is reached only when
+ * the port was never opened). The pause counters are kept. */
+static void sound_deactivate(Rt *rt)
+{
+	wave_stop_all_now(rt);
+	if (rt->wave_fade.on) {
+		rt->wave_fade.on = 0;
+		rt->wave_hwvol = rt->wave_fade.start;
+		wave_hw_apply(rt);
+	}
 	if (rt->music.res)
 		audio_stop_midi();
 	memset(&rt->music, 0, sizeof(rt->music));
-	if (rt->waves_paused)
-		audio_pause_waves(0);
-	if (rt->midi_paused)
-		audio_pause_midi(0);
-	rt->waves_paused = rt->midi_paused = 0;
 }
 
-/* End of a sound: like the WndProc with message 0x52C (1008:ED3C). */
-static void sound_end(Rt *rt, struct RtSound *x, int is_midi)
+/* Wave end notification: message 0x52C {wave, script} (WndProc 1008:ED3C): a script goes into
+ * the deferred-call queue, script 0 unloads the wave (FUN_1008_722A). */
+static void wave_notify(Rt *rt, struct RtWave *w)
 {
-	unsigned res = x->res;
-	uint16_t script = x->script;
-	int notify = x->notify;
-	memset(x, 0, sizeof(*x));
-	if (!notify)
-		return;
-	if (script) {
-		tr(rt, "-- end %s %u: script %u\n", is_midi ? "MIDI" : "wave", res,
-			(uint16_t)rt_operand(rt, rt->lstack, script));
-		queue_call(rt, script, (uint16_t)(0x8ACF + res), 0);
+	unsigned res = w->res;
+	if (w->script) {
+		tr(rt, "-- end wave %u: script %u\n", res, (uint16_t)rt_operand(rt, rt->lstack, w->script));
+		queue_call(rt, w->script, (uint16_t)(0x8ACF + res), 0);
 	}
-	else
-		tr(rt, "-- end %s %u: unloaded\n", is_midi ? "MIDI" : "wave", res);
+	else {
+		tr(rt, "-- end wave %u: unloaded\n", res);
+		if (!w->orphan)
+			wave_unload(rt, res);
+	}
+}
+
+/* A_004 (TOPSYA01 1000:24F2), wave part: device fade step, current priority, natural ends,
+ * delayed starts. The events count only while the window is active (W+0x74, FUN_1000_3D50). */
+static void wave_service(Rt *rt)
+{
+	uint32_t now = rt->now_ms;
+	if (rt->wave_fade.on && (int32_t)(now - rt->wave_fade.next) >= 0) { /* FUN_1000_21C4 / 22B4 */
+		rt->wave_fade.next = now + 200;
+		rt->wave_fade.vol = rt->wave_fade.vol > rt->wave_fade.delta ? rt->wave_fade.vol - rt->wave_fade.delta : 0;
+		if (--rt->wave_fade.steps == 0 || rt->wave_fade.vol == 0) {
+			rt->wave_fade.on = 0;
+			tr(rt, "-- device fade finished: all the waves stop\n");
+			wave_stop_all_now(rt);
+			rt->wave_hwvol = rt->wave_fade.start;
+		}
+		else
+			rt->wave_hwvol = rt->wave_fade.vol;
+		wave_hw_apply(rt);
+	}
+	if (!rt->active_audio)
+		return;
+	/* ctx+0x40 reset to 0 and raised by the events whose first pass is not over (W+0x3C); the
+	   ticks that fill a buffer (about every 190 ms) raise it with the voices being mixed
+	   instead: the much more frequent case is the one modelled */
+	int16_t prio = 0;
+	for (int i = 0; i < N_WAVES; i++) {
+		struct RtWave *w = &rt->waves[i];
+		if (w->used && w->prio_until && (int32_t)(now - w->prio_until) < 0 && w->prio > prio)
+			prio = w->prio;
+	}
+	rt->wave_prio = prio;
+	int any = 0;
+	for (int i = 0; i < N_WAVES; i++) {
+		struct RtWave *w = &rt->waves[i];
+		if (!w->used)
+			continue;
+		if (w->playing && !rt->waves_frozen && w->end_ms && (int32_t)(now - w->end_ms) >= 0) {
+			wave_halt(w); /* FUN_1000_2B16 -> 3D9E */
+			if (w->delay) /* a delayed wave starts again after a new random delay */
+				wave_delay_arm(rt, w);
+			else if (w->notify) {
+				w->notify = 0;
+				wave_notify(rt, w);
+				if (!w->used)
+					continue;
+			}
+		}
+		if (w->delay && !w->playing && (int32_t)(now - w->delay_due) >= 0) {
+			tr(rt, "-- wave %u: delayed start\n", w->res);
+			wave_play(rt, w); /* FUN_1000_2DC4 + 3D16, without gate or exclusivity */
+		}
+		any |= w->playing;
+	}
+	rt->wave_queued = any;
 }
 
 static void sound_check(Rt *rt)
 {
-	for (int i = 0; i < 16 && !rt->waves_paused; i++)
-		if (rt->snd[i].res && rt->snd[i].end_ms && (int32_t)(rt->now_ms - rt->snd[i].end_ms) >= 0)
-			sound_end(rt, &rt->snd[i], 0);
-	if (rt->music.res && !rt->midi_paused && rt->music.end_ms && (int32_t)(rt->now_ms - rt->music.end_ms) >= 0)
-		sound_end(rt, &rt->music, 1);
+	wave_service(rt);
+	if (rt->music.res && !rt->midi_paused && rt->music.end_ms && (int32_t)(rt->now_ms - rt->music.end_ms) >= 0) {
+		unsigned res = rt->music.res;
+		uint16_t script = rt->music.script;
+		int notify = rt->music.notify;
+		memset(&rt->music, 0, sizeof(rt->music)); /* FUN_1000_1B82: no current MIDI */
+		if (notify && script) {
+			tr(rt, "-- end MIDI %u: script %u\n", res, (uint16_t)rt_operand(rt, rt->lstack, script));
+			queue_call(rt, script, (uint16_t)(0x8ACF + res), 0);
+		}
+		else if (notify) {
+			tr(rt, "-- end MIDI %u: unloaded\n", res);
+			midi_unload(rt, res);
+		}
+	}
 }
 
-/* Expected end after loops repeats (-1 = never): 0 = does not end. */
-static uint32_t sound_end_ms(Rt *rt, uint32_t dur, int loops)
+int rt_movie_audio(Rt *rt, const Lb7Wave *h, int16_t *pcm, uint32_t samples)
 {
-	if (loops < 0)
+	struct RtWave *w = wave_free_slot(rt);
+	if (!w || !h->channels || !h->rate) {
+		free(pcm);
 		return 0;
-	uint32_t t = rt->now_ms + dur * (uint32_t)(loops + 1);
-	return t ? t : 1;
+	}
+	int v = audio_wave_create_pcm(pcm, samples, h->channels, h->rate);
+	if (!v)
+		return 0;
+	wave_init(w, h, v);
+	w->movie = 1;
+	w->values = samples;
+	w->pass_ms = (uint32_t)((uint64_t)samples / h->channels * 1000u / h->rate);
+	wave_start(rt, w, NULL, 0);
+	return v;
 }
 
-/* Opcode 08 (FUN_1008_8EAC -> A_029), 28 bytes: +2 wave, from +4 the parameter block of
- * TOPSYA01 {+4 repeats (-1 = infinite), +6 set volume, +7 notify at end of sound,
- * +8 (device restart, irrelevant), +9 volume 0..16, +0xA/+0xE fades in ms,
- * +0x12 delay in ms, +0x1A end-of-sound script}. Upsy uses only repeats, notification and script. */
+void rt_movie_audio_end(Rt *rt, int voice)
+{
+	for (int i = 0; i < N_WAVES; i++)
+		if (rt->waves[i].used && rt->waves[i].movie && rt->waves[i].voice == voice) {
+			wave_destroy(rt, &rt->waves[i]);
+			return;
+		}
+	audio_wave_destroy(voice); /* event already destroyed by a library change */
+}
+
+/* Opcode 08 (FUN_1008_8EAC -> A_029), 28 bytes: +2 wave, from +4 the parameter block (see
+ * wave_start), +0x1A end-of-sound script (resolved now, like the EXE). */
 static int op_wave(Rt *rt, int16_t *l, const uint8_t *b)
 {
-	unsigned res = (uint16_t)rt_operand(rt, l, lb7_rd16(b + 2));
+	uint16_t enc = lb7_rd16(b + 2);
+	unsigned res = (uint16_t)rt_operand(rt, l, enc);
 	if (lb7_entry(&rt->lib, res).type != LB7_T_WAVE) {
 		tr(rt, "   wave %u: is not a sound (the script stops)\n", res);
 		return 0;
 	}
-	int loops = (int16_t)lb7_rd16(b + 4);
-	int vol = b[6] ? (b[9] > 16 ? 16 : b[9]) * 16 : 256;
-	if (lb7_rd32(b + 0xA) || lb7_rd32(b + 0xE) || lb7_rd32(b + 0x12))
-		tr(rt, "   ?? wave %u: fades/delay not yet ported\n", res);
-	struct RtSound *w = wave_slot(rt, res);
-	if (w) /* one event per resource: a new play restarts from the beginning */
-		wave_stop(w);
-	else if (!(w = wave_slot(rt, 0))) {
-		w = &rt->snd[0];
-		wave_stop(w);
-	}
-	w->res = (uint16_t)res;
-	w->voice = audio_play_wave(&rt->lib, res, loops, vol);
-	w->notify = b[7];
 	/* the script is resolved now, like Op08 (it may be a local variable); 0 = unload */
 	int16_t sc = lb7_rd16(b + 0x1A) ? rt_operand(rt, l, lb7_rd16(b + 0x1A)) : 0;
-	w->script = sc ? (uint16_t)(sc + 0x8ACF) : 0;
-	w->end_ms = sound_end_ms(rt, audio_wave_duration_ms(&rt->lib, res), loops);
-	tr(rt, "   wave %u (repeats %d%s)\n", res, loops, w->notify ? ", notify at end" : "");
+	uint16_t script = sc ? (uint16_t)(sc + 0x8ACF) : 0;
+	struct RtWave *w = wave_event(rt, res);
+	if (!w) { /* FUN_1008_74FA = 0: no event; with notification the script is queued at once */
+		tr(rt, "   wave %u: no wave event (100 in use)%s\n", res, b[7] && script ? ", end script queued" : "");
+		if (b[7] && script)
+			queue_call(rt, script, enc, 0);
+		return 1;
+	}
+	wave_start(rt, w, b + 4, script);
+	/* builtin 97 (DAT_1540): queued after every A_029 with the wave as argument. The decompiler
+	   shows DAT_0E36 (the audio context) as script: a register mix-up, DAT_1540 is assumed. */
+	if (rt->wave_hook)
+		queue_call(rt, rt->wave_hook, enc, 0);
 	return 1;
 }
 
-/* Opcode 0F (FUN_1008_AAAA -> A_039) {wave (0 = all), fade in ms}: no notification. */
+/* Opcode 0F (FUN_1008_AAAA -> A_039) {wave (0 = all), fade in ms}: no notification. A wave
+ * whose event does not exist (not loaded) is left alone. */
 static void op_wave_stop(Rt *rt, int16_t *l, const uint8_t *b)
 {
 	uint16_t enc = lb7_rd16(b + 2);
-	if (lb7_rd32(b + 4))
-		tr(rt, "   ?? stop wave with fade not yet ported\n");
+	uint32_t ms = lb7_rd32(b + 4);
 	if (!enc) {
-		for (int i = 0; i < 16; i++)
-			wave_stop(&rt->snd[i]);
+		wave_stop_all(rt, ms);
+		wave_service(rt); /* A_004 of FUN_1000_3CB6 */
 		return;
 	}
-	struct RtSound *w = wave_slot(rt, (uint16_t)rt_operand(rt, l, enc));
-	if (w)
-		wave_stop(w);
+	struct RtWave *w = wave_find(rt, (uint16_t)rt_operand(rt, l, enc));
+	if (w && wave_stop(rt, w, ms))
+		wave_service(rt); /* A_004 of FUN_1000_3CB6 */
+}
+
+/* Opcode 5C parameters of the MIDI event res (A_032: W+0x22 mult, W+0x24 div, W+0x30.. mute). */
+static struct RtMidiEv *midi_ev_of(Rt *rt, unsigned res, int create)
+{
+	for (int i = 0; i < N_MIDI_EV; i++)
+		if (rt->midi_ev[i].res == res)
+			return &rt->midi_ev[i];
+	if (!create)
+		return NULL;
+	int k = -1;
+	for (int i = 0; i < N_MIDI_EV && k < 0; i++)
+		if (!rt->midi_ev[i].res)
+			k = i;
+	for (int i = 0; i < N_MIDI_EV && k < 0; i++) /* table full: forgets one that is not playing */
+		if (rt->midi_ev[i].res != rt->music.res)
+			k = i;
+	if (k < 0)
+		return NULL;
+	memset(&rt->midi_ev[k], 0, sizeof(rt->midi_ev[k]));
+	rt->midi_ev[k].res = (uint16_t)res;
+	return &rt->midi_ev[k];
 }
 
 /* Opcode 50 (FUN_1008_9BBE -> A_028) {MIDI, repeats, notify, script}: only one music track at a
@@ -1978,11 +2520,21 @@ static int op_midi(Rt *rt, int16_t *l, const uint8_t *b)
 	int loops = (int16_t)lb7_rd16(b + 4);
 	if (rt->music.res)
 		audio_stop_midi();
+	unsigned mult = 0, div = 0;
+	uint16_t mute = 0;
+	struct RtMidiEv *p = midi_ev_of(rt, res, 0);
+	if (p) {
+		mult = p->mult;
+		div = p->div;
+		mute = p->mute;
+	}
+	memset(&rt->music, 0, sizeof(rt->music));
 	rt->music.res = (uint16_t)res;
 	rt->music.notify = b[6];
 	rt->music.script = enc_const(rt, l, lb7_rd16(b + 8));
-	rt->music.end_ms = sound_end_ms(rt, audio_midi_duration_ms(&rt->lib, res), loops);
-	if (!audio_play_midi(&rt->lib, res, loops))
+	rt->music.end_ms = sound_end_ms(rt, audio_midi_duration_ms(&rt->lib, res, mult, div), loops,
+		rt->midi_paused, rt->midi_paused_at);
+	if (!audio_play_midi(&rt->lib, res, loops, mult, div, mute))
 		tr(rt, "   MIDI %u muted (SoundFont missing): the end is still computed\n", res);
 	tr(rt, "   MIDI %u (repeats %d%s)\n", res, loops, rt->music.notify ? ", notify at end" : "");
 	return 1;
@@ -1992,25 +2544,86 @@ static int op_midi(Rt *rt, int16_t *l, const uint8_t *b)
 static void op_midi_stop(Rt *rt, int16_t *l, const uint8_t *b)
 {
 	uint16_t enc = lb7_rd16(b + 2);
-	if (!rt->music.res || (enc && (uint16_t)rt_operand(rt, l, enc) != rt->music.res))
+	if (!rt->music.res || (enc && (rt->music.orphan || (uint16_t)rt_operand(rt, l, enc) != rt->music.res)))
 		return;
 	audio_stop_midi();
 	memset(&rt->music, 0, sizeof(rt->music));
 }
 
-/* Opcode 5D (FUN_1008_A32A) {up, device}: device volume one step (1/31) up or down
- * (FUN_1008_8CBE); device 0 = all, 1 wave, 2 MIDI, 3 auxiliary (CD: absent). */
-/* Device volume: levels of opcode 5D, 0 when muted (opcode 35). */
+/* Opcode 5C (FUN_1008_9EAC -> A_032), 14 bytes: {+2 MIDI, +4 channels flag, +5 tempo flag,
+ * +6 channel mask, +8 mute bits, +0xA divisor, +0xC multiplier (operands)}. Tempo: every delay
+ * of the sequence becomes delay * mult / div (div 0 = unscaled). Channels: for every bit of the
+ * mask the mute flag of the channel takes the bit of +8; a channel that becomes muted gets All
+ * Notes Off (CC 0x7B) at once, then its note-ons are dropped. Kept by the MIDI event. */
+static void op_midi_params(Rt *rt, int16_t *l, const uint8_t *b)
+{
+	unsigned res = (uint16_t)rt_operand(rt, l, lb7_rd16(b + 2));
+	if (lb7_entry(&rt->lib, res).type != LB7_T_MIDI) {
+		tr(rt, "   MIDI %u: is not a sequence\n", res);
+		return;
+	}
+	struct RtMidiEv *p = midi_ev_of(rt, res, 1);
+	if (!p)
+		return;
+	unsigned old_mult = p->mult, old_div = p->div;
+	if (b[5]) {
+		p->div = (uint16_t)rt_operand(rt, l, lb7_rd16(b + 0xA));
+		p->mult = (uint16_t)rt_operand(rt, l, lb7_rd16(b + 0xC));
+	}
+	if (b[4]) {
+		unsigned mask = lb7_rd16(b + 6), val = lb7_rd16(b + 8);
+		for (int ch = 0; ch < 16; ch++, mask >>= 1, val >>= 1)
+			if ((mask & 1) && ((p->mute >> ch) & 1) != (val & 1)) {
+				p->mute = (uint16_t)((p->mute & ~(1u << ch)) | (val & 1) << ch);
+				if (val & 1)
+					audio_midi_notes_off(ch); /* FUN_1000_1868, on the open port */
+			}
+	}
+	tr(rt, "   MIDI %u: tempo x%u/%u, muted channels 0x%04X\n", res, p->mult, p->div, p->mute);
+	if (rt->music.res == res && !rt->music.orphan) {
+		audio_midi_params(p->mult, p->div, p->mute);
+		/* the expected end moves with the tempo of the rest of the sequence */
+		if (rt->music.end_ms && !rt->midi_paused && (int32_t)(rt->music.end_ms - rt->now_ms) > 0) {
+			uint64_t left = rt->music.end_ms - rt->now_ms;
+			uint64_t on = old_div ? old_mult : 1, od = old_div ? old_div : 1;
+			uint64_t nn = p->div ? p->mult : 1, nd = p->div ? p->div : 1;
+			if (on && nd) {
+				left = left * od * nn / (on * nd);
+				rt->music.end_ms = rt->now_ms + (uint32_t)(left > 0x7FFFFFFF ? 0x7FFFFFFF : left);
+				if (!rt->music.end_ms)
+					rt->music.end_ms = 1;
+			}
+		}
+	}
+}
+
+/* Opcode 09 (FUN_1008_8E92 -> A_027) {track (low byte of the raw word)}: CD audio track. With
+ * no CD audio device (always, in the port) FUN_1000_014E fails to open MCI "cdaudio": it has
+ * flushed the wave queue (FUN_1000_0D7C(1) -> 3600) and A_027 returns 0 (DAT_5B6E = 0). */
+static void op_cd_play(Rt *rt, const uint8_t *b)
+{
+	tr(rt, "   CD track %u: no CD audio device\n", b[2]);
+	wave_flush(rt);
+}
+
+/* Device volume: wave = waveOutSetVolume value (0 when muted, opcode 35), MIDI level. */
 static void apply_volume(Rt *rt)
 {
-	audio_set_wave_volume(rt->mute ? 0 : rt->vol_wave * 256 / 31);
+	rt->wave_hwvol = rt->mute ? 0 : rt->vol_wave * 0x842;
+	wave_hw_apply(rt);
 	audio_set_music_volume(rt->mute ? 0 : rt->vol_midi * 256 / 31);
 }
 
+/* Opcode 5D (FUN_1008_A32A) {up, device}: device volume one step (1/31) up or down
+ * (FUN_1008_8CBE); device 0 = all, 1 = CD (AUX: A_017 / A_031), 2 = MIDI (A_018 / A_033),
+ * 3 = wave (A_021 / A_036). Without a CD AUX device A_017 reads 0 and A_031 fails, so device 1
+ * changes nothing and CdVolume is not written. */
 static void op_volume(Rt *rt, const uint8_t *b)
 {
 	int up = b[2] != 0, dev = b[3];
-	int *lv[2] = { dev == 0 || dev == 1 ? &rt->vol_wave : NULL, dev == 0 || dev == 2 ? &rt->vol_midi : NULL };
+	int *lv[2] = { dev == 0 || dev == 3 ? &rt->vol_wave : NULL, dev == 0 || dev == 2 ? &rt->vol_midi : NULL };
+	if (dev == 1)
+		tr(rt, "   volume CD: no CD audio device\n");
 	for (int k = 0; k < 2; k++)
 		if (lv[k]) {
 			if (up && *lv[k] < 31)
@@ -2020,13 +2633,13 @@ static void op_volume(Rt *rt, const uint8_t *b)
 		}
 	apply_volume(rt);
 	char v[16];
-	if (lv[0]) {
-		snprintf(v, sizeof(v), "%i", (int16_t)(rt->vol_wave * 0x842));
-		ini_put(rt, "audio", "WaveVolume", v);
-	}
 	if (lv[1]) {
 		snprintf(v, sizeof(v), "%i", (int16_t)(rt->vol_midi * 0x842));
 		ini_put(rt, "audio", "MidiVolume", v);
+	}
+	if (lv[0]) {
+		snprintf(v, sizeof(v), "%i", (int16_t)(rt->vol_wave * 0x842));
+		ini_put(rt, "audio", "WaveVolume", v);
 	}
 	tr(rt, "   volume wave %d/31, MIDI %d/31\n", rt->vol_wave, rt->vol_midi);
 }
@@ -2044,22 +2657,31 @@ static void op_mute(Rt *rt, const uint8_t *b)
 	}
 }
 
-/* Sound pause: the expected ends shift by the duration of the pause. */
-static void pause_waves(Rt *rt, int on)
+/* Waves held: builtin 70 / Pause key (A_042: waveOutPause) or inactive window (A_005(0): the
+ * events are not mixed, W+0x74 = 0). The expected natural ends shift by the time held. */
+static void waves_freeze(Rt *rt)
 {
-	if (!on == !rt->waves_paused)
+	int on = rt->waves_paused || !rt->active_audio;
+	if (!on == !rt->waves_frozen)
 		return;
-	rt->waves_paused = on;
+	rt->waves_frozen = (uint8_t)on;
 	if (on)
 		rt->waves_paused_at = rt->now_ms;
 	else
-		for (int i = 0; i < 16; i++)
-			if (rt->snd[i].end_ms)
-				rt->snd[i].end_ms += rt->now_ms - rt->waves_paused_at;
+		for (int i = 0; i < N_WAVES; i++)
+			if (rt->waves[i].used && rt->waves[i].playing && rt->waves[i].end_ms)
+				rt->waves[i].end_ms += rt->now_ms - rt->waves_paused_at;
 	audio_pause_waves(on);
 }
 
-/* A_025: counter; the music stops at the first "pause" and restarts when it returns to 0. */
+static void pause_waves(Rt *rt, int on)
+{
+	rt->waves_paused = on;
+	waves_freeze(rt);
+}
+
+/* A_025: counter; the music stops at the first "pause" (all notes off, FUN_1000_1802(1)) and
+ * goes on when it returns to 0 (FUN_1000_1802(0)). */
 static void pause_midi(Rt *rt, int on)
 {
 	if (on) {
@@ -2259,6 +2881,15 @@ int rt_op(Rt *rt, int16_t *l, const uint8_t *bytes)
 		return op_wave(rt, l, bytes);
 	case 0x0F: /* stop the waves (1008:AAAA) */
 		op_wave_stop(rt, l, bytes);
+		return 1;
+	case 0x09: /* CD audio track (1008:8E92 -> A_027) */
+		op_cd_play(rt, bytes);
+		return 1;
+	case 0x0E: /* CD audio stop (1008:AA96): A_037 only if DAT_5B6E, never set without a CD */
+		tr(rt, "   CD stop: no CD audio device\n");
+		return 1;
+	case 0x5C: /* MIDI tempo and channel mute (1008:9EAC -> A_032) */
+		op_midi_params(rt, l, bytes);
 		return 1;
 	case 0x50: /* play a MIDI (1008:9BBE) */
 		return op_midi(rt, l, bytes);
@@ -2761,6 +3392,10 @@ int16_t rt_builtin(Rt *rt, unsigned id, unsigned argc, const int16_t *a)
 	 * compare it with 53 and 106 to choose the detail. On a modern PC: maximum. */
 	case 0x8C: return 0x7FFF;
 	case 0x9A: return a[0]; /* DAT_5B92 = argument */
+	case 0x97: /* script queued after every opcode 08, with the wave as argument (DAT_1540) */
+		rt->wave_hook = a[0] ? (uint16_t)(a[0] + 0x8ACF) : 0;
+		tr(rt, "   wave start script = %d\n", a[0]);
+		return a[0];
 	case 0x69: { /* keyboard filter script (DAT_1506); returns the previous one, decoded */
 		uint16_t old = (uint16_t)rt->v1506;
 		rt->v1506 = (int16_t)(a[0] ? (uint16_t)(a[0] + 0x8ACF) : 0);

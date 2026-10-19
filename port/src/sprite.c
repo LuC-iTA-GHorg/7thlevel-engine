@@ -20,10 +20,14 @@ static uint8_t *bitmap_pixels(SprWorld *w, const uint8_t *data, uint32_t size, c
 static void edited_release(SprWorld *w, unsigned id);
 static void add_stamp(void *ctx, const uint8_t *pix, const Lb7Bitmap *b, int l, int t, int tr, int fx, int fy);
 
-static void movie_stop(Sprite *s)
+static void movie_stop(SprWorld *w, Sprite *s)
 {
-	if (s->mv_audio)
-		audio_stop(s->mv_audio);
+	if (s->mv_audio) { /* FUN_1010_10F2: A_013 frees the movie's wave event */
+		if (w->rt)
+			rt_movie_audio_end(w->rt, s->mv_audio);
+		else
+			audio_wave_destroy(s->mv_audio);
+	}
 	lb7_movie_frame_free(&s->mv_frame);
 	s->mv_active = 0;
 	s->mv_audio = 0;
@@ -58,8 +62,13 @@ static int movie_step(SprWorld *w, Sprite *s)
 			Lb7Wave wv;
 			uint8_t *pcm;
 			size_t len = lb7_movie_audio(m, &wv, &pcm);
-			if (len)
-				s->mv_audio = audio_play_pcm((int16_t *)pcm, (uint32_t)(len / 2), wv.channels, wv.rate, 0, 256);
+			/* FUN_1010_0D12: A_011 on the header + A_029 with block NULL (priority and
+			   exclusivity of the header apply, no notification) */
+			if (len && w->rt)
+				s->mv_audio = rt_movie_audio(w->rt, &wv, (int16_t *)pcm, (uint32_t)(len / 2));
+			else if (len && (s->mv_audio = audio_wave_create_pcm((int16_t *)pcm, (uint32_t)(len / 2),
+				wv.channels, wv.rate)) != 0)
+				audio_wave_start(s->mv_audio, 0);
 			s->mv_pc += 30;
 			break;
 		}
@@ -80,9 +89,9 @@ void spr_init(SprWorld *w, const Lb7 *lib, struct Rt *rt)
 	w->rt = rt;
 }
 
-static void spr_free(Sprite *s)
+static void spr_free(SprWorld *w, Sprite *s)
 {
-	movie_stop(s);
+	movie_stop(w, s);
 	for (int i = 0; i < s->n_frames; i++)
 		free(s->frames[i].pix);
 	free(s->frames);
@@ -94,7 +103,7 @@ void spr_clear(SprWorld *w)
 {
 	for (int i = 0; i < SPR_MAX; i++)
 		if (w->spr[i].used)
-			spr_free(&w->spr[i]);
+			spr_free(w, &w->spr[i]);
 	for (int k = 0; k < 2; k++) {
 		free(w->bg[k].pix);
 		memset(&w->bg[k], 0, sizeof(w->bg[k]));
@@ -225,8 +234,14 @@ int spr_load(SprWorld *w, unsigned id)
 			f.text_id = (uint16_t)m;
 			s->frames[s->n_frames++] = f;
 		}
-		/* 10 (movie) used by cmd 17; 9/4 (default sound/music): to do */
+		/* 10 (movie) used by cmd 17. 9/4: the original preloads the wave / MIDI event (no sound
+		   starts); here the event is created at the first opcode 08/50. Unloading the sprite
+		   destroys them (rt_unload). */
 	}
+	/* +0x14: default (background) sprite, FUN_1008_6BAA: its last wave/MIDI members survive a
+	   link (the sprite itself and its palette at 0xF6 - DAT_1530 are not ported) */
+	if (d[0x14] && w->rt)
+		rt_default_sprite(w->rt, id);
 	/* current frame = the first one, even when hidden: needed by the hit test of sprites with
 	   state 1 (clickable even if invisible, e.g. the menu buttons of TOPSMAIN) */
 	s->n_shown = s->n_frames ? 1 : 0;
@@ -238,7 +253,7 @@ void spr_unload(SprWorld *w, unsigned id)
 {
 	Sprite *s = find(w, id);
 	if (s) {
-		spr_free(s);
+		spr_free(w, s);
 		edited_release(w, 0); /* FUN_1008_6502: members whose count drops to 0 are freed */
 	}
 }
@@ -259,9 +274,9 @@ void spr_hide(SprWorld *w, unsigned id)
 		s->visible = 0;
 }
 
-static void stop_anim(Sprite *s)
+static void stop_anim(SprWorld *w, Sprite *s)
 {
-	movie_stop(s);
+	movie_stop(w, s);
 	free(s->anim);
 	s->anim = NULL;
 	s->anim_size = s->pc = 0;
@@ -307,7 +322,7 @@ int spr_show(SprWorld *w, unsigned id, unsigned anim, int hide_first)
 	}
 	if (hide_first)
 		s->visible = 0;
-	stop_anim(s);
+	stop_anim(w, s);
 	if (!anim) { /* S_010: just stops the animation; with the flag the sprite is already hidden (S_025) */
 		if (getenv("UPSY_OLDSHOW")) {
 			s->visible = 1;
@@ -728,7 +743,7 @@ static void run_anim(SprWorld *w, Sprite *s)
 			return;
 		case 0x17: { /* movie {type 10 resource, ...} (TOPSYS01 4AC2 -> 4F68; TOPSY 1010) */
 			unsigned id = (uint16_t)anim_val(w, rd16(p + 2));
-			movie_stop(s);
+			movie_stop(w, s);
 			if (!lb7_movie_open(w->lib, id, &s->mv)) {
 				w->unknown_cmd[0x17]++;
 				s->pc += n;
@@ -1077,7 +1092,7 @@ void spr_stamp(SprWorld *w, const Video *v, unsigned id, int keep)
 			continue;
 		sprite_images(w, v, s, add_stamp, w);
 		if (!keep) {
-			stop_anim(s);
+			stop_anim(w, s);
 			s->visible = 0;
 		}
 	}
@@ -1100,7 +1115,7 @@ int spr_replace(SprWorld *w, unsigned old_id, unsigned new_id)
 	Sprite *n = find(w, new_id);
 	o = find(w, old_id); /* spr_load does not move sprites, but just to be safe */
 	if (o != n)
-		stop_anim(o); /* S_010: the old one's animation (and queued commands) stops */
+		stop_anim(w, o); /* S_010: the old one's animation (and queued commands) stops */
 	if (!n->n_frames && o->n_frames) { /* FUN_1008_E4F4 + S_045: inherits the images */
 		SprFrame *f = calloc((size_t)o->n_frames, sizeof(SprFrame));
 		if (!f)

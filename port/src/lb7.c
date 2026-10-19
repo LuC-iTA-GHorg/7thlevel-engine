@@ -354,15 +354,25 @@ static int16_t ima_nibble(ImaState *s, unsigned n)
 	return (int16_t)s->pred;
 }
 
+/* Fields of the 28-byte header shared by type 9 waves and movie audio (command 03). */
+static void wave_fields(const uint8_t *d, Lb7Wave *w)
+{
+	w->data_size = rd32(d);
+	w->in_memory = d[4];
+	w->overlay = d[5];
+	w->adpcm = d[6];
+	w->prio = (int16_t)rd16(d + 8);
+	w->id = rd16(d + 0xA);
+	w->channels = rd16(d + 14);
+	w->rate = rd32(d + 16);
+	w->bits = rd16(d + 26);
+}
+
 int lb7_wave_header(const uint8_t *d, size_t size, Lb7Wave *w)
 {
 	if (size < 28)
 		return 0;
-	w->data_size = rd32(d);
-	w->adpcm = d[6];
-	w->channels = rd16(d + 14);
-	w->rate = rd32(d + 16);
-	w->bits = rd16(d + 26);
+	wave_fields(d, w);
 	return w->data_size <= size - 28 && w->channels >= 1 && w->channels <= 2 && w->rate;
 }
 
@@ -522,10 +532,7 @@ size_t lb7_movie_audio(const Lb7Movie *m, Lb7Wave *w, uint8_t **pcm)
 	}
 	if (!hdr)
 		return 0;
-	w->adpcm = hdr[6];
-	w->channels = rd16(hdr + 14);
-	w->rate = rd32(hdr + 16);
-	w->bits = rd16(hdr + 26);
+	wave_fields(hdr, w); /* priority and overlay apply to movie audio too (A_029 with block NULL) */
 	if (w->channels < 1 || w->channels > 2 || !w->rate)
 		return 0;
 	uint32_t total = 0;

@@ -60,10 +60,14 @@ typedef struct {
 
 #define LB7_BMP_RLE 0x80
 
-/* Wave header (type 9), 28 bytes. */
+/* Wave header (type 9), 28 bytes (TOPSYA01 Wave_InitFromHeader 1000:2786). */
 typedef struct {
 	uint32_t data_size;
+	uint8_t in_memory;       /* +4: "pre-loaded / allowed while the CD plays" (W+0x78) */
+	uint8_t overlay;         /* +5: overlay flag (W+0x7B): mixes with everything, never killed */
 	uint8_t adpcm;           /* +6: IMA ADPCM 4 bit */
+	int16_t prio;            /* +8: priority, SIGNED (W+0x72) */
+	uint16_t id;             /* +0xA: wave id, wParam of the end message 0x52C (W+0x6A) */
 	uint16_t channels, bits; /* from WAVEFORMAT at +0xC */
 	uint32_t rate;
 } Lb7Wave;

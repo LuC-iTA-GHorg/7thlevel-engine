@@ -12,7 +12,8 @@ Detailed documents:
 - [FORMAT_7LB.md](FORMAT_7LB.md): library format, resource types, bitmap/wave/MIDI/movie codecs;
 - [SCRIPT_OPCODES.md](SCRIPT_OPCODES.md): script bytecode, instructions, engine functions
   (builtins), system variables, input;
-- [SPRITES_ANIMATIONS.md](SPRITES_ANIMATIONS.md): sprites, animation commands, drawing, timing.
+- [SPRITES_ANIMATIONS.md](SPRITES_ANIMATIONS.md): sprites, animation commands, drawing, timing;
+- [AUDIO.md](AUDIO.md): audio model (wave events, priority, fades, MIDI, CD, volumes).
 
 ## Game logic
 
