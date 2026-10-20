@@ -1,6 +1,6 @@
 /*
  * sprite - sprite and animation engine (port of TOPSYS01.DLL, Sprite Library 1.2).
- * Formats in src\docs\SPRITE_ANIM.md. Sprites from type 17 resources, frames (types 1 and 12),
+ * Formats in docs\SPRITES_ANIMATIONS.md. Sprites from type 17 resources, frames (types 1 and 12),
  * animation commands 01..17 (03 and 13 one-tick no-ops), layered drawing, hit
  * tests. Events (0x15) are game logic translated to C (rt_anim_event), calls (0x16)
  * go through rt_anim_call.

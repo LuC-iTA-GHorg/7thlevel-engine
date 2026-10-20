@@ -1,12 +1,13 @@
-﻿# Runs the repeatable scene tests (tools\eventi\*.txt) and merges the coverage.
+﻿# Runs the repeatable scene tests (tools\events\*.txt; the legacy folder name tools\eventi\ is
+# used when tools\events\ does not exist) and merges the coverage.
 # Each test: fresh copy of the reference INI, fixed seed, simulated time without waits,
-# trace and coverage in build\prove\<name>\. In the event file:
-#   #! expect: TEXT    the trace must contain TEXT (also several lines)   [Italian: #! atteso:]
-#   #! ini: FILE       starting INI (in tools\eventi\; default rif.ini)
-#   #! seed: N         rand() seed (default 1234)                          [Italian: #! seme:]
-#   MS shot NAME.bmp   the screenshot ends up in build\prove\<name>\NAME.bmp
+# trace and coverage in build\tests\<name>\. In the event file:
+#   #! expect: TEXT    the trace must contain TEXT (also several lines)   [legacy alias: #! atteso:]
+#   #! ini: FILE       starting INI (in the events folder; default ref.ini, legacy name rif.ini)
+#   #! seed: N         rand() seed (default 1234)                          [legacy alias: #! seme:]
+#   MS shot NAME.bmp   the screenshot ends up in build\tests\<name>\NAME.bmp
 # Usage: run_scenes.ps1 [-Only name1,name2] [-Exe build\GAME.exe]
-# Result: outcome table per test and build\prove\copertura.txt (union of all the tests).
+# Result: outcome table per test and build\tests\coverage.txt (union of all the tests).
 param(
 	[string[]] $Only = @(),
 	[string] $Exe = ''
@@ -14,8 +15,8 @@ param(
 . (Join-Path $PSScriptRoot 'game.ps1')
 $root = Get-GameRoot
 if (-not $Exe) { $Exe = Join-Path $root "build\$((Get-Game $root).NAME).exe" }
-$evdir = Join-Path $root 'tools\eventi'
-$outroot = Join-Path $root 'build\prove'
+$evdir = Get-EventDir $root
+$outroot = Join-Path $root 'build\tests'
 New-Item -ItemType Directory -Force $outroot | Out-Null
 
 $kinds = @('script', 'lists', 'sprite (type 17)', 'animations (type 15)')
@@ -65,20 +66,21 @@ foreach ($f in $files) {
 	$out = Join-Path $outroot $name
 	New-Item -ItemType Directory -Force $out | Out-Null
 	$lines = Get-Content $f.FullName
-	$ini = 'rif.ini'; $seed = 1234; $expect = @()
+	$ini = 'ref.ini'; $seed = 1234; $expect = @()
 	foreach ($l in $lines) {
+		# atteso, seme: legacy aliases
 		if ($l -match '^#!\s*(?:atteso|expect):\s*(.+)$') { $expect += $Matches[1].Trim() }
 		elseif ($l -match '^#!\s*ini:\s*(\S+)') { $ini = $Matches[1] }
 		elseif ($l -match '^#!\s*(?:seme|seed):\s*(\d+)') { $seed = [int]$Matches[1] }
 	}
-	$ev = Join-Path $out 'eventi.txt'
+	$ev = Join-Path $out 'events.txt'
 	$lines | ForEach-Object {
 		if ($_ -match '^(\d+)\s+shot\s+(\S+)') { "$($Matches[1]) shot " + (Join-Path $out $Matches[2]) } else { $_ }
 	} | Set-Content -Encoding ASCII $ev
 	$testini = Join-Path $out 'test.ini'
-	Copy-Item (Join-Path $evdir $ini) $testini -Force
-	$trace = Join-Path $out 'traccia.txt'
-	$cov = Join-Path $out 'copertura.txt'
+	Copy-Item (Resolve-TestIni $evdir $ini) $testini -Force
+	$trace = Join-Path $out 'trace.txt'
+	$cov = Join-Path $out 'coverage.txt'
 	$t0 = Get-Date
 	$argList = @('--game', '--800', '--seed', "$seed", '--fixed-step', '--fast', '--ini', "`"$testini`"",
 		'--input', "`"$ev`"", '--trace', "`"$trace`"", '--coverage', "`"$cov`"")
@@ -99,7 +101,7 @@ foreach ($f in $files) {
 }
 
 # Union of the coverage
-$sum = Join-Path $outroot 'copertura.txt'
+$sum = Join-Path $outroot 'coverage.txt'
 $report = @("Merged coverage of the tests ($($files.Count) event files), executed / present", '')
 $gh = @{}; $gn = @{}
 foreach ($k in $kinds) { $gh[$k] = 0; $gn[$k] = 0 }

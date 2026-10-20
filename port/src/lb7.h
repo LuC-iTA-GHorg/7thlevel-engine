@@ -1,6 +1,6 @@
 /*
  * lb7 - reader for "7LB" archives (7th Level Resource Library 1.2) in portable C.
- * Format documented in src\docs\FORMATO_7LB.md. Shared between the port and lb7tool.
+ * Format documented in docs\FORMAT_7LB.md. Shared between the port and lb7tool.
  */
 #ifndef LB7_H
 #define LB7_H
@@ -122,7 +122,7 @@ static inline uint32_t lb7_midi_event(const Lb7Midi *m, uint32_t i) { return lb7
 
 /* Script: instruction length in bytes, 0 = unknown opcode (Script_OpLength + check). */
 unsigned lb7_op_len(const uint8_t *p, size_t avail);
-/* Opcode mnemonic (src\docs\OPCODE_SCRIPT.md), NULL if not yet identified. */
+/* Opcode mnemonic (docs\SCRIPT_OPCODES.md), NULL if not yet identified. */
 const char *lb7_op_name(unsigned op);
 
 /* Animations (type 15): command length in bytes, 0 = unknown. Table DS:0C0A of

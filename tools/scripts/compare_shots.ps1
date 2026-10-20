@@ -4,7 +4,7 @@
 # sheet "original | port | differences" (differing pixels in red, masked areas in blue).
 # Usage: compare_shots.ps1 -Orig dir -Port dir -Out dir [-Tol 40] [-Limit 3.0] [-Masks 'x,y,w,h;...']
 # Result per image: OK if the differing pixels are at most Limit %. Exit code 1 if an image
-# exceeds the limit or is missing. Summary also in Out\esito.txt.
+# exceeds the limit or is missing. Summary also in Out\result.txt.
 param(
 	[Parameter(Mandatory)] [string] $Orig,
 	[Parameter(Mandatory)] [string] $Port,
@@ -87,6 +87,6 @@ foreach ($pf in (Get-ChildItem $Port -Filter *.bmp | Sort-Object Name)) {
 	$sheet.Save((Join-Path $Out "$base.png"), [Drawing.Imaging.ImageFormat]::Png)
 	$sheet.Dispose(); $diff.Dispose(); $o.Dispose(); $p.Dispose()
 }
-$rows | Set-Content -Encoding UTF8 (Join-Path $Out 'esito.txt')
+$rows | Set-Content -Encoding UTF8 (Join-Path $Out 'result.txt')
 $rows
 if ($fail) { exit 1 }

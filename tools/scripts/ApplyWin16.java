@@ -1,10 +1,10 @@
-// Pulizia per moduli Win16 NE (MSC 16-bit):
-//  1. firme FAR PASCAL delle API di sistema importate (win16_api.txt), con storage custom
-//     per mantenere l'ordine reale dei parametri pascal;
-//  2. convenzione e stack purge delle funzioni interne, dedotte da RET/RETF [n];
-//  3. nomi/firme manuali da names_<MODULO>.txt (formato: indirizzo nome [firma C]);
-//  4. propagazione dei parametri dal decompilatore al database (due passate).
-// Uso (headless): -postScript ApplyWin16.java [cartella_names]
+// Cleanup for Win16 NE modules (MSC 16-bit):
+//  1. FAR PASCAL signatures of the imported system APIs (win16_api.txt), with custom storage
+//     to keep the real order of the pascal parameters;
+//  2. calling convention and stack purge of the internal functions, deduced from RET/RETF [n];
+//  3. manual names/signatures from names_<MODULE>.txt (format: address name [C signature]);
+//  4. propagation of the parameters from the decompiler to the database (two passes).
+// Usage (headless): -postScript ApplyWin16.java [names_folder]
 // @category UPSY
 
 import java.io.File;
@@ -44,16 +44,16 @@ public class ApplyWin16 extends GhidraScript {
 		defineStructs();
 		int api = applyApiSignatures(new File(dir, "win16_api.txt"));
 		int conv = applyConventions();
-		// nomi manuali del gioco: cartella passata come argomento (default: cartella dello script)
+		// manual names of the game: folder passed as argument (default: the script's folder)
 		String[] args = getScriptArgs();
 		File namesDir = args.length > 0 ? new File(args[0]) : dir;
 		int names = applyNames(new File(namesDir, "names_" + module + ".txt"));
 		int committed = commitParams() + commitParams();
-		println(String.format("UPSY ApplyWin16 %s: %d API, %d convenzioni, %d nomi manuali, %d firme propagate",
+		println(String.format("UPSY ApplyWin16 %s: %d API, %d conventions, %d manual names, %d signatures propagated",
 			module, api, conv, names, committed));
 	}
 
-	// ---------------------------------------------------------------- tipi
+	// ---------------------------------------------------------------- types
 
 	private void defineStructs() {
 		DataType i16 = ShortDataType.dataType;
@@ -118,7 +118,7 @@ public class ApplyWin16 extends GhidraScript {
 			t.equals("WORD") || t.equals("BOOL") || t.equals("ATOM") || t.equals("WPARAM"))) {
 			return typedef(t, t.equals("BOOL") ? ShortDataType.dataType : WordDataType.dataType);
 		}
-		// struttura non definita: segnaposto opaco
+		// undefined structure: opaque placeholder
 		return types.computeIfAbsent(t, n -> dtm.addDataType(new StructureDataType(CAT, n, 0, dtm),
 			DataTypeConflictHandler.KEEP_HANDLER));
 	}
@@ -159,7 +159,7 @@ public class ApplyWin16 extends GhidraScript {
 		return n;
 	}
 
-	// Firma FAR con storage custom: pascal (callee pop, ordine inverso sullo stack) o cdecl.
+	// FAR signature with custom storage: pascal (callee pop, reverse order on the stack) or cdecl.
 	private void applySignature(Function fn, String ret, String paramList, boolean cdecl)
 			throws Exception {
 		Register ax = currentProgram.getRegister("AX");
@@ -184,7 +184,7 @@ public class ApplyWin16 extends GhidraScript {
 			sizes[i] = Math.max(2, dts[i].getLength());
 			total += sizes[i];
 		}
-		// pascal: primo parametro all'offset più alto; cdecl: al più basso
+		// pascal: first parameter at the highest offset; cdecl: at the lowest
 		int off = 4;
 		int[] offs = new int[params.size()];
 		if (cdecl) {
@@ -209,7 +209,7 @@ public class ApplyWin16 extends GhidraScript {
 		fn.setStackPurgeSize(cdecl ? 0 : total);
 	}
 
-	// ---------------------------------------------------------------- convenzioni
+	// ---------------------------------------------------------------- conventions
 
 	private int applyConventions() throws Exception {
 		int n = 0;
@@ -245,7 +245,7 @@ public class ApplyWin16 extends GhidraScript {
 		return n;
 	}
 
-	// ---------------------------------------------------------------- nomi manuali
+	// ---------------------------------------------------------------- manual names
 
 	private int applyNames(File f) throws Exception {
 		if (!f.exists()) {
@@ -257,12 +257,12 @@ public class ApplyWin16 extends GhidraScript {
 			if (line.isEmpty() || line.startsWith("#")) {
 				continue;
 			}
-			// indirizzo|nome|ritorno|parametri|pascal/cdecl|noreturn  (campi dal 3° opzionali)
+			// address|name|return|parameters|pascal/cdecl|noreturn  (fields from the 3rd on are optional)
 			String[] p = line.split("\\|", -1);
 			Address a = currentProgram.getAddressFactory().getAddress(p[0].trim());
 			Function fn = a == null ? null : getFunctionAt(a);
 			if (fn == null) {
-				printerr("names: nessuna funzione a " + p[0]);
+				printerr("names: no function at " + p[0]);
 				continue;
 			}
 			fn.setName(p[1].trim(), SourceType.USER_DEFINED);
@@ -277,7 +277,7 @@ public class ApplyWin16 extends GhidraScript {
 		return n;
 	}
 
-	// ---------------------------------------------------------------- decompilatore -> DB
+	// ---------------------------------------------------------------- decompiler -> DB
 
 	private int commitParams() throws Exception {
 		DecompInterface ifc = new DecompInterface();
@@ -303,8 +303,8 @@ public class ApplyWin16 extends GhidraScript {
 					n++;
 				}
 				catch (Exception e) {
-					// es. parametri in storage "unique" non rappresentabili nel DB
-					printerr("commit saltato " + f.getEntryPoint() + " " + f.getName() + ": " +
+					// e.g. parameters in "unique" storage that cannot be represented in the DB
+					printerr("commit skipped " + f.getEntryPoint() + " " + f.getName() + ": " +
 						e.getMessage());
 				}
 			}

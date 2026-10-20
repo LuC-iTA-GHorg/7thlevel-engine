@@ -266,7 +266,7 @@ int rt_open_library(Rt *rt, const char *file)
 	rt->in_startup = 1;
 	/* G(0): the null operand of a sprite level (+0xE = 0) is read as G(0) (1008:6C08);
 	   no script writes it, so it is 0. UPSY_G0=N changes it for experiments (investigation of the
-	   faces of TOPSFINA, DA_FARE.md). */
+	   faces of TOPSFINA, still open). */
 	if (created && getenv("UPSY_G0"))
 		rt->g[0] = (int16_t)atoi(getenv("UPSY_G0"));
 	rt_run(rt, 0, rt->lstack);
@@ -2913,7 +2913,7 @@ static int op_midi(Rt *rt, int16_t *l, const uint8_t *b)
 	unsigned res = (uint16_t)rt_operand(rt, l, lb7_rd16(b + 2));
 	if (lb7_entry(&rt->lib, res).type != LB7_T_MIDI) {
 		tr(rt, "   MIDI %u: is not a sequence\n", res);
-		return 1; /* FUN_1008_740E fallito: the instruction does nothing */
+		return 1; /* FUN_1008_740E failed: the instruction does nothing */
 	}
 	int loops = (int16_t)lb7_rd16(b + 4);
 	if (rt->music.res)
@@ -3608,7 +3608,7 @@ int rt_op(Rt *rt, int16_t *l, const uint8_t *bytes)
 		if (rt->spr)
 			spr_break_loops(rt->spr, (uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 2)), bytes[4]);
 		return 1;
-	case 0x1C: /* {sprite, livello}: draw level (1008:9A20 -> S_065) */
+	case 0x1C: /* {sprite, level}: draw level (1008:9A20 -> S_065) */
 		if (rt->spr)
 			spr_set_layer(rt->spr, (uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 2)),
 				(uint16_t)rt_operand(rt, l, lb7_rd16(bytes + 4)));
@@ -3791,7 +3791,7 @@ unsigned rt_rand(Rt *rt)
  * Sine table at DS:002E of the DLL (901 words, 10000 * sin): the original computed it with
  * pi = 3.1415 (verified: 0 differences over 901 values, 93 with true pi). Floating-point
  * conversions truncate toward zero and keep the low 16 bits (FUN_1000_13D0: RC = 11, 64-bit
- * fistp). Angle constant DS:26A0 = 1800 / 3.1415. See OPCODE_SCRIPT.md, "Math". */
+ * fistp). Angle constant DS:26A0 = 1800 / 3.1415. See docs\SCRIPT_OPCODES.md (builtins). */
 #define U_ANG_K 572.9746936176986L
 
 static int16_t u_trunc(long double v)
@@ -4248,7 +4248,7 @@ int16_t rt_builtin(Rt *rt, unsigned id, unsigned argc, const int16_t *a)
 		if (argc >= 2 && rt->spr)
 			spr_scroll_all(rt->spr, a[0], a[1]);
 		return 0;
-	case 0x73: { /* {&x, &y, passo, passi, x0, y0, xm, ym, x1, y1}: point of the parabola that passes
+	case 0x73: { /* {&x, &y, step, steps, x0, y0, xm, ym, x1, y1}: point of the parabola that passes
 		through (x0,y0) at the start, (xm,ym) at the middle and (x1,y1) at the end (S_074 -> TOPSYS01 1000:1758) */
 		if (argc < 10 || !(uint16_t)a[3])
 			return 0;
@@ -4283,7 +4283,7 @@ int16_t rt_builtin(Rt *rt, unsigned id, unsigned argc, const int16_t *a)
 			rt->timers_paused = a[0] != 0;
 		}
 		return 0;
-	case 0x70: /* pause (1) / resume (0) of all sounds (A_042: wave e musica) */
+	case 0x70: /* pause (1) / resume (0) of all sounds (A_042: wave and music) */
 		if (!a[0] != !rt->waves_paused) {
 			pause_waves(rt, a[0] != 0);
 			pause_midi(rt, a[0] != 0);

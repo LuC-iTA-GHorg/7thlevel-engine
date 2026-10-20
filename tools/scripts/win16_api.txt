@@ -1,7 +1,7 @@
-# Firme delle API Win16 importate dai moduli del gioco.
-# Formato: MODULO|NOME|TIPO_RITORNO|parametri (TIPO nome, ...)|convenzione (pascal default, cdecl)
-# Tipi da 4 byte: DWORD LONG COLORREF LRESULT LPARAM, puntatori FAR* / LP*, *PROC
-# Esclusi (convenzioni a registri o costanti): INITTASK DOS3CALL __FPMATH __AHINCR __AHSHIFT __WINFLAGS
+# Signatures of the Win16 APIs imported by the game modules.
+# Format: MODULE|NAME|RETURN_TYPE|parameters (TYPE name, ...)|convention (pascal default, cdecl)
+# 4-byte types: DWORD LONG COLORREF LRESULT LPARAM, FAR* / LP* pointers, *PROC
+# Excluded (register conventions or constants): INITTASK DOS3CALL __FPMATH __AHINCR __AHSHIFT __WINFLAGS
 GDI|ABORTDOC|int|HDC hdc
 GDI|ANIMATEPALETTE|void|HPALETTE hpal, UINT iStart, UINT cEntries, PALETTEENTRY FAR* lppe
 GDI|BITBLT|BOOL|HDC hdcDest, int x, int y, int cx, int cy, HDC hdcSrc, int xSrc, int ySrc, DWORD rop
@@ -123,7 +123,7 @@ MMSYSTEM|WAVEOUTRESTART|UINT|HWAVEOUT hWaveOut
 MMSYSTEM|WAVEOUTSETVOLUME|UINT|UINT uDeviceID, DWORD dwVolume
 MMSYSTEM|WAVEOUTUNPREPAREHEADER|UINT|HWAVEOUT hWaveOut, WAVEHDR FAR* lpWaveOutHdr, UINT cbWaveOutHdr
 MMSYSTEM|WAVEOUTWRITE|UINT|HWAVEOUT hWaveOut, WAVEHDR FAR* lpWaveOutHdr, UINT cbWaveOutHdr
-# SHELL.DLL per ordinale: 20 = ShellExecute, 34 = ExtractIcon
+# SHELL.DLL by ordinal: 20 = ShellExecute, 34 = ExtractIcon
 SHELL|Ordinal_20=SHELLEXECUTE|HINSTANCE|HWND hwnd, LPCSTR lpszOp, LPCSTR lpszFile, LPCSTR lpszParams, LPCSTR lpszDir, int fsShowCmd
 SHELL|Ordinal_34=EXTRACTICON|HICON|HINSTANCE hinst, LPCSTR lpszExeName, UINT iIcon
 TOOLHELP|MEMMANINFO|BOOL|MEMMANINFO FAR* lpEnhMode

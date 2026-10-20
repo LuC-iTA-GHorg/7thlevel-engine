@@ -20,3 +20,25 @@ function Get-GameRoot {
 	if (Test-Path (Join-Path (Get-Location) 'build\game.h')) { return (Get-Location).Path }
 	(Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 }
+
+# Folder of the scene tests (event files and reference INIs): tools\events, or the legacy
+# tools\eventi when only that one exists.
+function Get-EventDir([string] $Root) {
+	$d = Join-Path $Root 'tools\events'
+	if (-not (Test-Path $d)) {
+		$legacy = Join-Path $Root 'tools\eventi'
+		if (Test-Path $legacy) { return $legacy }
+	}
+	$d
+}
+
+# Starting INI of a scene test in the events folder: the requested name, or the legacy/new
+# name of the reference INI (rif.ini <-> ref.ini) when only that one exists.
+function Resolve-TestIni([string] $Dir, [string] $Ini) {
+	$f = Join-Path $Dir $Ini
+	if (-not (Test-Path $f)) {
+		$alt = @{ 'ref.ini' = 'rif.ini'; 'rif.ini' = 'ref.ini' }[$Ini.ToLower()]
+		if ($alt -and (Test-Path (Join-Path $Dir $alt))) { return (Join-Path $Dir $alt) }
+	}
+	$f
+}

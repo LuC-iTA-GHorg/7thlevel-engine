@@ -81,7 +81,7 @@ struct Rt {
 	int depth;                 /* DAT_153C */
 	int stop;                  /* DAT_1548 */
 	uint32_t rand_seed;
-	/* engine state set by the scripts (meaning to be completed, see OPCODE_SCRIPT.md) */
+	/* engine state set by the scripts (meaning to be completed, see docs\SCRIPT_OPCODES.md) */
 	int16_t v1502, v1504, v1506, v1508, v150e, v40dc, v40de;
 	int16_t table4090[0x22];
 	char str5bd8[17];
@@ -201,7 +201,7 @@ struct Rt {
 	uint32_t now_ms;           /* last time passed to rt_tick */
 	int screen_w, screen_h;    /* resolution: G(5003)/G(5004) (default 640x480) */
 	int mouse_x, mouse_y;      /* G(5005)/G(5006), relative to the screen center */
-	/* ---- input (TOPSY 1008:345C..3CEA, see OPCODE_SCRIPT.md "Input") */
+	/* ---- input (TOPSY 1008:345C..3CEA, see docs\SCRIPT_OPCODES.md "Input") */
 	/* opcode 0C: key (Windows virtual code) -> script; [0] normal, [1] Shift, [2] Ctrl,
 	   [3] release; table of 256 11-byte records at DS:4BFB */
 	uint16_t key_script[256][4];
@@ -235,7 +235,7 @@ struct Rt {
 	uint16_t drag_sprite;      /* DAT_14FE: sprite being dragged (encoded), 0 = none */
 	int drag_x, drag_y;        /* DAT_10C4/10C6: last position during the drag */
 	int warp_mouse;            /* opcode 49: the main loop must move the cursor */
-	/* ---- player controllers (TOPSY 1008:4DE8..5DFC, OPCODE_SCRIPT.md "Controller"):
+	/* ---- player controllers (TOPSY 1008:4DE8..5DFC, docs\SCRIPT_OPCODES.md "Player controllers"):
 	   two 0x201-byte records at DS:44EA; only the fields used by the games here */
 	struct RtPad {
 		uint16_t hist;         /* +0: code history, h = h * 16 + code (FUN_1008_4DE8) */

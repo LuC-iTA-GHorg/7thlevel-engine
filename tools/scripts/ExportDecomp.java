@@ -1,6 +1,6 @@
-// Esporta il C decompilato di ogni funzione del programma corrente.
-// Uso (headless): -postScript ExportDecomp.java <cartella_output>
-// Produce <out>\<MODULO>\<MODULO>.c, functions.csv, imports.txt, strings.txt
+// Exports the decompiled C of every function of the current program.
+// Usage (headless): -postScript ExportDecomp.java <output_folder>
+// Produces <out>\<MODULE>\<MODULE>.c, functions.csv, imports.txt, strings.txt
 // @category UPSY
 
 import java.io.File;
@@ -32,16 +32,16 @@ public class ExportDecomp extends GhidraScript {
 		ifc.toggleSyntaxTree(true);
 		ifc.setSimplificationStyle("decompile");
 		if (!ifc.openProgram(currentProgram)) {
-			printerr("Decompiler non avviato: " + ifc.getLastMessage());
+			printerr("Decompiler not started: " + ifc.getLastMessage());
 			return;
 		}
 
 		int ok = 0, fail = 0;
 		try (PrintWriter c = new PrintWriter(new File(outDir, module + ".c"), "UTF-8");
 				PrintWriter csv = new PrintWriter(new File(outDir, "functions.csv"), "UTF-8")) {
-			c.println("// " + currentProgram.getName() + " - decompilato con Ghidra " +
+			c.println("// " + currentProgram.getName() + " - decompiled with Ghidra " +
 				ghidra.framework.Application.getApplicationVersion());
-			c.println("// Linguaggio: " + currentProgram.getLanguageID());
+			c.println("// Language: " + currentProgram.getLanguageID());
 			c.println();
 			csv.println("address,name,size,calling_convention,status");
 
@@ -60,7 +60,7 @@ public class ExportDecomp extends GhidraScript {
 					ok++;
 				}
 				else {
-					c.println("/* DECOMPILAZIONE FALLITA: " +
+					c.println("/* DECOMPILATION FAILED: " +
 						(r == null ? "?" : r.getErrorMessage()) + " */\n");
 					status = "fail";
 					fail++;
@@ -91,7 +91,7 @@ public class ExportDecomp extends GhidraScript {
 			}
 		}
 
-		println("UPSY export " + module + ": " + ok + " funzioni ok, " + fail + " fallite -> " +
+		println("UPSY export " + module + ": " + ok + " functions ok, " + fail + " failed -> " +
 			outDir.getAbsolutePath());
 	}
 }

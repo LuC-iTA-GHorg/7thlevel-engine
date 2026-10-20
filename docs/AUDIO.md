@@ -9,8 +9,8 @@ in a few handlers of `TOPSY.EXE`. The port splits it in two:
 - `port\src\audio.c` + `midi.c`: SDL2 mixer and TinySoundFont sequencer, which only render
   (gain, fades, MIDI tempo/mute).
 
-Addresses: `D:` = TOPSYA01 (`E:\UPSY\src\TOPSYA01\TOPSYA01.c`), `X:` = TOPSY.EXE
-(`E:\UPSY\src\TOPSY\TOPSY.c`), both decompiled. `W+x` = field of the DLL wave event (0x8E bytes),
+Addresses: `D:` = TOPSYA01 (the decompiled `TOPSYA01.c` of the dev repository), `X:` = TOPSY.EXE
+(the decompiled `TOPSY.c`). `W+x` = field of the DLL wave event (0x8E bytes),
 `ctx+x` = field of the DLL context.
 
 ## Wave events

@@ -3,7 +3,7 @@
  * Reads and writes <game>.ini in its own folder (the same as <game>.exe), checks that the necessary
  * files are present and starts the game. File format: port\src\config.h.
  *
- * Compilato da build.bat: gcc -mwindows ... -lcomctl32 -lcomdlg32 -lshell32 -lole32
+ * Built by build.bat: gcc -mwindows ... -lcomctl32 -lcomdlg32 -lshell32 -lole32
  */
 #define UNICODE
 #define _UNICODE

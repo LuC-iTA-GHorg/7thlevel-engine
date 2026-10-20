@@ -1,5 +1,5 @@
 /*
- * cov - coverage counters (--coverage FILE, phase 0.3 of SCALETTA_MOTORE.md).
+ * cov - coverage counters (--coverage FILE, phase 0.3 of the engine roadmap).
  * For each opened library: scripts, lists, sprites and animations run at least once,
  * builtins, animation commands and generic instructions (rt_op) with the number of executions.
  * Opcodes translated to C leave no trace at runtime: the report estimates them from the bytecode

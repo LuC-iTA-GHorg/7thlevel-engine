@@ -1,7 +1,7 @@
 /*
  * lb7 - reader for "7LB" archives (7th Level Resource Library 1.2).
  * Reconstructed from TOPSYR01.DLL (RESOPENFILE, RESLOADRESOURCE, Chunk_Decode, Bitmap_ExpandRLE)
- * and TOPSYA01.DLL (Ima_DecodeTo16). See src\docs\FORMATO_7LB.md.
+ * and TOPSYA01.DLL (Ima_DecodeTo16). See docs\FORMAT_7LB.md.
  */
 #include "lb7.h"
 

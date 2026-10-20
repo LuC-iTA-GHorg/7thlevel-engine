@@ -99,7 +99,7 @@ echo       from %GAMESRC%
 rem Windows resources (port\res\game.rc): version info, manifest and, if available, the icon of
 rem the original EXE (extracted by lb7tool at build time, never stored in the repository).
 rem windres passes the -I folders to the preprocessor without quotes and fails with a space in
-rem the path (e.g. E:\ALTRI GIOCHI): the resources are compiled from a copy in build\res.
+rem the path (e.g. a folder named "My Games"): the resources are compiled from a copy in build\res.
 set "RCDEF="
 if not exist "%OUT%\res" mkdir "%OUT%\res"
 copy /y "%ENGINE%\port\res\*" "%OUT%\res\" >nul

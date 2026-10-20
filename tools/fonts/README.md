@@ -1,7 +1,7 @@
 # Fonts for the game text
 
 The game asks for **Times New Roman** (also as "Times Roman") and **Arial**, height 20 and 24
-(type 18 resources, `src\docs\SPRITE_ANIM.md`). The port uses, in order:
+(type 18 resources, `docs\SPRITES_ANIMATIONS.md`). The port uses, in order:
 
 1. the Windows fonts if present (`%WINDIR%\Fonts\times.ttf`, `arial.ttf`): the same ones
    as the original, read from the system and not copied into the project;
