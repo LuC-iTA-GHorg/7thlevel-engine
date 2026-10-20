@@ -2,10 +2,10 @@
 
 Reference for the interpreter. Source: TOPSY.EXE (`Script_ExecOp` 1008:CE92, `Script_OpLength`
 1008:C9D4, `Script_EvalExpr` 1008:2464, `Engine_Command` 1008:1002). Verification: `lb7tool disasm`
-walks all 2469 scripts of the 10 archives without errors.
+walks all 2469 scripts of the 10 archives of the Upsy Daisy CD without errors.
 
 Legend of the "Certainty" column: **certain** = read from the decompiled code; **probable** =
-inferred from the APIs called; **?** = to be analyzed.
+inferred from the APIs called.
 
 ## Execution model
 
@@ -24,7 +24,8 @@ Reconstructed from TOPSY.EXE (`Script_Run` 1008:D754, loop 1008:CB84, startup 10
   to the game areas.
 - **Nesting** at most 30 (error 0x6A).
 
-In the port these scripts are **translated to C** (`port\game\*.c`, see `port\README.md`): the model
+In the port these scripts are **translated to C** by `port\tools\scr2c.c` at build time
+(`build\gamesrc\*.c`, or `port\game\*.c` in a development tree; see `README.md`): the model
 above is implemented by `port\src\rt.c`. The instructions contained in the **animation events**
 (command 0x15 of type 15) are translated too: see `SPRITES_ANIMATIONS.md`.
 
@@ -204,8 +205,8 @@ left unported.
 
 Partial: 09/0E/5D (CD audio behaves as with no CD drive), 38 (`%l`
 arguments stay 16 bit), 12 (the go-back case "previous == current library closes the window"
-of FUN_1008_9224 is not modelled). Audio model: `docs\AUDIO.md`; sprites and resources:
-`docs\SPRITES_ANIMATIONS.md`.
+of FUN_1008_9224 is not modelled). Audio model: [AUDIO.md](AUDIO.md); sprites and resources:
+[SPRITES_ANIMATIONS.md](SPRITES_ANIMATIONS.md).
 
 ### Win16-only features: design choices
 
@@ -251,7 +252,7 @@ like any global; `G(5018..5117)` are game variables (e.g. `G(5038)` key choice,
 |---|---|---|---|
 | `G(5001)` | 3C5C | last mouse button pressed (1 left, 2 right), written by 1008:35B2 | `rt_mouse_button` |
 | `G(5002)` | 3C5E | **LoMem** = low memory, reduced detail: `GetPrivateProfileInt` `LoMem` in the "Topsy Turvy" section, default `DAT_5B81` (set to 1 by the memory and CPU check `FUN_1000_04B0`) | `rt->lomem` from `[Topsy Turvy] LoMem` (`rt_load_settings`), default 0 |
-| `G(5003)`, `G(5004)` | 3C60, 3C62 | screen resolution: `GetDeviceCaps` 8 (HORZRES) and 10 (VERTRES) in `DAT_1518`/`DAT_151A`; with >= 800 the game chooses the 800x600 backgrounds | `screen_w`/`screen_h` (`main.c`: window size, default 640x480) |
+| `G(5003)`, `G(5004)` | 3C60, 3C62 | screen resolution: `GetDeviceCaps` 8 (HORZRES) and 10 (VERTRES) in `DAT_1518`/`DAT_151A`; with >= 800 the game chooses the 800x600 backgrounds | `screen_w`/`screen_h` (`main.c`: the logical resolution, 800x600 by default, 640x480 with `--640`) |
 | `G(5005)`, `G(5006)` | 3C64, 3C66 | cursor position: at startup `GetCursorPos` minus the viewport origin (`DAT_10C8/10CA`); then WM_MOUSEMOVE (1008:3CEA) and opcode 49 | `mouse_x`/`mouse_y`; zero when the mouse becomes a controller (cursor at the center) |
 | `G(5007)`, `G(5008)` | 3C68, 3C6A | point of the last click (1008:35B2) | `rt_mouse_button` |
 | `G(5009)`, `G(5010)` | 3C6C, 3C6E | release point of a dragged sprite (1008:3036) | `rt.c` (end of drag) |
@@ -312,7 +313,8 @@ builtin 81 and calls it back (e.g. TOPSMAIN 3078 → 8729, which moves the **cur
 
 **Cursors** (opcode 1F, FUN_1010_27F6): mode 1 arrow, 2..3 and 5..9 cursors 0x3E9..0x3EF of
 TOPSY.EXE (NE resources), 4 and others no cursor; mode 9 (0x3EF) is an **empty** cursor: the
-menu draws its own cursor as a sprite. In the port: system cursor always visible (to do).
+menu draws its own cursor as a sprite. Ported (`video_cursor_mode`): the cursors are read from
+the NE resources of the original EXE (`GAME_EXE_RES` of the profile), mode 4 hides the cursor.
 
 ## Audio (TOPSYA01, ported in `rt.c` "sounds" + `audio.c`)
 
@@ -401,8 +403,8 @@ turned on by FUN_1008_4A60): a direction blocks itself and frees the previous on
 frees the release and vice versa. Otherwise the zone runs the script of table DS:4090
 (opcode 48). In the port: `rt_joy_move`/`rt_joy_button`, events `SDL_JOYAXISMOTION`/`SDL_JOYBUTTON*`
 (axes 0 and 1, center 0); for testing, `--joysticks N` and the `joymove`/`joybutton` commands of
-`--input`. The INI key for the choice is `InputMethod1`/`InputMethod2` in
-`[Topsy Turvy Games.Upsy]` (0 keyboard, 1 joystick, 2 mouse).
+`--input`. The INI key for the choice is `InputMethod1`/`InputMethod2` (in Upsy Daisy in
+`[Topsy Turvy Games.Upsy]`; 0 keyboard, 1 joystick, 2 mouse).
 
 **History and combinations** (not used by the present games, ported). FUN_1008_4DE8 also
 keeps a history of the codes in the record (`+0`): for directions and button presses (not for
@@ -436,7 +438,7 @@ ported too.
 | 31 | `GETANGLE`; ported | certain |
 | 39 / 3A | `lstrcmp` / `lstrcmpi` of two strings (ids), −1/0/1; ported | certain |
 | 41 / 42 | `COSINE` / `SINE`; ported | certain |
-| 62 | absolute value | certain |
+| 62 | absolute value; ported | certain |
 | 44 | sprite visible? (S_063, field +0x56); 0 if not loaded; ported | certain |
 | 65 / 66 | copy of a sprite (type 17) into an **extra slot** of the index (`RESCOPYRESOURCE`, first free slot after the entries of the file; the in-memory data, including the click scripts, are copied) and its loading; 66 unloads it and frees the slot. Ported (`lb7_copy_entry`) | certain |
 | 69 | sets the **keyboard filter** script (`DAT_1506`), returns the previous one decoded | certain |
@@ -454,7 +456,7 @@ ported too.
 | 7C | `COLLIDE` (collision); ported | certain |
 | 7E | `DISTANCE`; ported | certain |
 | 7F | `REFLECTANGLE`; ported | certain |
-| 80 | `SQUAREROOT`: `(int16) trunc(sqrt(a))` (TOPSYU01 1000:1098, `fistp` with truncation) | certain |
+| 80 | `SQUAREROOT`: `(int16) trunc(sqrt(a))` (TOPSYU01 1000:1098, `fistp` with truncation); ported | certain |
 | 85 | `GETQUADRANT`; ported | certain |
 | 90 | `GETVERSION`: 0x1F (0x5F with Windows 95); ported (Windows 3.1: 0x1F) | certain |
 | 93 | **inactivity timeout** `(script, seconds)` (`DAT_150C`, 16-bit interval = seconds × 1000): input re-arms it, on expiry the script is queued (FUN_1008_DEAA); it is not `TIMEGETTIME`; ported | certain |
@@ -465,17 +467,17 @@ ported too.
 ### Other ported builtins (`rt_builtin`)
 
 They complete the table above. All in the `Engine_Command` switch (1008:1002); `rt_builtin`
-is called by the C generated by `scr2c` (`port\game\*.c`).
+is called by the C generated by `scr2c`.
 
 | Id | Arguments | Behavior | Original | Port |
 |---|---|---|---|---|
-| 2E | `{min, max}` | random **inclusive** between the two bounds (swapped if `max < min`): `min + rand() % (max - min + 1)`; the row above was "probable", now **certain** | 1008:1002, `rand` 1018:03CC | ported (`rt_rand`, 16-bit CRT) |
+| 2E | `{min, max}` | random **inclusive** between the two bounds (swapped if `max < min`): `min + rand() % (max - min + 1)` | 1008:1002, `rand` 1018:03CC | ported (`rt_rand`, 16-bit CRT) |
 | 87 | `{a, b}` | signed minimum | 1008:1002 (then 1F28) | ported |
 | 88 | `{a, b}` | signed maximum | 1008:1002 (then 1F28) | ported |
 | 8C | – | `DAT_10DE` = free memory (high word of `GetFreeSpace`, 64 KB units); the startup scripts compare it with 53 and 106 to choose the detail level | 1008:1002; written in `FUN_1000_04B0` | ported: always returns 0x7FFF (maximum) |
 | 90 | – | `GETVERSION`: the original returns 0x5F if the high byte (minor version) is `_` (0x5F, Windows 95), otherwise 0x1F | 1008:1002 | ported: 0x1F like Windows 3.1 |
 | 97 | `{script}` | `DAT_1540` = script (0 = none, reset when a library opens): after every opcode 08 (started or refused by the priority gate) the script is queued with the wave operand as argument. The decompiled code shows `DAT_0E36` (audio context) as the queued script: a register mix-up, `DAT_1540` is assumed; returns the argument (not popped) | 1008:1002, 1008:8EAC | ported |
-| 9A | `{value}` | `DAT_5B92 = value` (1 at startup, `FUN_1000_05E4`): if it is on and Ctrl+Shift are pressed, mouse and keyboard messages (1008:35B2, 383A, 3B3C, 3CEA) take the hidden path of dragging with screen capture (a hidden debugging feature of the original); TOPSCRED turns it off with 0; no return value | 1008:1002 | partly ported: returns the argument, without storing it (the hidden function does not exist in the port) |
+| 9A | `{value}` | `DAT_5B92 = value` (1 at startup, `FUN_1000_05E4`): if it is on and Ctrl+Shift are pressed, mouse and keyboard messages (1008:35B2, 383A, 3B3C, 3CEA) take the hidden path of dragging with screen capture (a hidden debugging feature of the original); TOPSCRED turns it off with 0; no return value | 1008:1002 | ported: stored (`rt->v5b92`) and returned; it only exempts Ctrl+Shift clicks from the rectangle selection, the capture itself is not ported (see "Win16-only features") |
 | 72 | `{&x, &y, step, steps, x0, y0, x1, y1}` | point of the segment: `x = x0 + R((x1 − x0)·step/steps)`, same for y, R = rounded half away from zero (unsigned step/steps); steps 0 = nothing written | S_073 → TOPSYS01 FUN_1000_3F84 | ported |
 | 98 | `{dx, dy}` | scrolls the whole scene: every sprite (position, start and targets of a running 05/09) moves by (dx, dy) (FUN_1000_6736); the original also scrolls the window with `ScrollDC` and repaints the uncovered strips | S_085 | ported (`spr_scroll_all`; the screen is redrawn every frame) |
 
@@ -513,8 +515,8 @@ original; the port counts them in `unimpl_builtin`, writes `?? builtin XX` and r
 | 94 | 3 | `{type-1 bitmap, file, index}`: `ExtractIcon` drawn into the bitmap (FUN_1008_87D0), 1/0 | 0 = failure |
 | 95 | 1 | writes `guest` (DS:001C) into the string variable | ported |
 | 96 | 1-3 | `WinExec(program)`, or with a script FUN_1008_DB8C (window hidden, `ShellExecute`, script when the program ends); 1 on success | disabled, returns 0 |
-| 97 | 1 | `DAT_1540` = script queued with the wave id whenever opcode 08 starts a wave | ported (`rt->wave_hook`, queued by opcode 08) |
+| 97 | 1 | `DAT_1540` = script queued with the wave operand after every opcode 08 (started or refused by the priority gate) | ported (`rt->wave_hook`, table above) |
 | 98 | 2 | `S_085`: scrolls the view and every sprite by `(dx, dy)` | ported (table above) |
 | 9B | 3 | leftover: empties the string variable of the third argument (FUN_1008_B298) | ported |
 | 9C | 3 | leftover: does nothing (FUN_1008_B2B0) | ported |
-| ≥ B3 | – | DLL plug-in functions (`FUN_1008_2386`, `EXTERNALCALL`): they do not exist in the present games | not ported |
+| ≥ B3 | – | DLL plug-in functions (`FUN_1008_2386`, `EXTERNALCALL`): they do not exist in the present games | not needed, not ported |

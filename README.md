@@ -26,9 +26,11 @@ submodule (`engine\`).
 | `pinball` | Jungle Pinball | Jungle Arcade | `T&PPINPC.BIN` |
 | `slingshooter` | Slingshooter | Jungle Arcade | `T&PSHTPC.BIN` |
 
-Status: Upsy Daisy can be played from start to end and matches the original screen by screen.
-The other games start, reach their menus and can be played (Djali Bowling, Jungle Pinball,
-Hippo Hop...); they are less tested.
+Status: the engine implements every script instruction, builtin function and animation command
+of the original Runtime Player, audio included. All 9 games build and start. Upsy Daisy can be
+played from start to end and has been compared with the original screen by screen (screenshots
+within 1-2% of differing pixels); the other 8 games have not been compared with the original
+yet. Djali Bowling and Le Food Feud also have repeatable scene tests.
 
 All the games share the same engine and the same script instructions; the differences between
 the two families (7THLEVEL.INI section, escapes in INI strings, fonts) are in the profiles.
@@ -36,8 +38,11 @@ the two families (7THLEVEL.INI section, escapes in INI strings, fonts) are in th
 ## Requirements
 
 - Windows 10 or 11, 64-bit.
-- The files of the original CD of the game (`*.BIN`, the `.EXE`, and `*.TTF` when present).
-- About 120 MB of free space for the portable build tools (downloaded on request, see below).
+- The files of the original CD of the game: the `.BIN` libraries, the original `.EXE` (icon,
+  cursors and the name of its `7THLEVEL.INI` section) and, for the Jungle Arcade games,
+  `HYENA.TTF`. The original `.DLL` files are not used.
+- About 115 MB of downloads for the portable build tools (on request, see below), more once
+  unpacked.
 
 Nothing is installed on the system: compiler, SDL2 and SoundFont are unpacked in `tools\`.
 
@@ -52,6 +57,9 @@ Nothing is installed on the system: compiler, SDL2 and SoundFont are unpacked in
    build.bat pinball    rem or name the profile
    ```
 
+   Without a profile name, `build.bat` uses the environment variable `GAME_PROFILE` if set,
+   otherwise the first profile whose original EXE is in the data folder.
+
    The first time, `tools\setup_tools.bat build` shows what it is going to download
    (w64devkit GCC, SDL2 for MinGW, the GeneralUser GS SoundFont), asks for confirmation and
    checks the SHA-256 of every file.
@@ -59,7 +67,8 @@ Nothing is installed on the system: compiler, SDL2 and SoundFont are unpacked in
    `port\tools\scr2c.c` into `build\gamesrc\` and compiled together with the engine. These
    generated files come from your copy of the game: do not publish them.
 
-Output: `build\<game>.exe`, `build\<game>_launcher.exe`, `build\SDL2.dll`, `build\lb7tool.exe`.
+Output: `build\<game>.exe`, `build\<game>_launcher.exe`, `build\SDL2.dll`, `build\lb7tool.exe`,
+`build\scr2c.exe`.
 `tools\make_dist.bat` collects what is needed to play in `dist\` (without the game files).
 Other commands: `build.bat GAME debug` (debug build), `build.bat clean`.
 
@@ -104,6 +113,10 @@ Command-line options take precedence. The game keeps its own settings and high s
 | `--seed N`, `--fixed-step [MS]`, `--fast` | repeatable runs: fixed random seed, simulated clock, no waiting |
 | `--ini FILE` | `7THLEVEL.INI` to use |
 | `--coverage FILE` | which scripts, sprites and animations were executed |
+| `--joysticks N` | tests: N joysticks declared to the game even if none is connected |
+| `--run SECONDS` | runs the game logic without a window and reports what was not handled |
+| `--entry N`, `--mixdown N FILE.wav` | viewer starting from entry N; mixes wave entry N into a WAV file (audio test) |
+| `--probe X Y`, `--proberadius R` | diagnostics: sprites under a point of the screen |
 
 ## How it works
 
@@ -111,18 +124,28 @@ Command-line options take precedence. The game keeps its own settings and high s
   runtime of the game logic (`rt.c`), sprites and animations (`sprite.c`), 8-bit framebuffer
   and palette (`video.c`), mixer (`audio.c`), MIDI sequencer with TinySoundFont (`midi.c`), text
   (`text.c`, stb_truetype, also with the fonts shipped with a game), settings (`config.c`),
-  string resources of the original EXE (`ne.c`), main loop (`main.c`).
+  cursors and string resources of the original EXE (`ne.c`), coverage report (`cov.c`), main
+  loop (`main.c`).
 - The game logic is not interpreted: `scr2c` translates every script of the `.BIN` files into a
   C function at build time, with structured `if`/`while` and direct calls; the engine provides
   the instructions (`rt_op`) and functions (`rt_builtin`) the scripts use, including the math
   library of the Jungle games (angles, collisions, intersections) with the original rounding.
 - The engine follows the behaviour of the original, verified by comparing screenshots and
-  timings with the original games; technical notes in [docs/ENGINE.md](docs/ENGINE.md), script
-  instructions in [docs/SCRIPT_OPCODES.md](docs/SCRIPT_OPCODES.md).
+  timings with the original game. Technical documents:
+  - [docs/ENGINE.md](docs/ENGINE.md): overview (game logic, main loop and timing, drawing);
+  - [docs/FORMAT_7LB.md](docs/FORMAT_7LB.md): library format and codecs;
+  - [docs/SCRIPT_OPCODES.md](docs/SCRIPT_OPCODES.md): script instructions, builtins, input;
+  - [docs/SPRITES_ANIMATIONS.md](docs/SPRITES_ANIMATIONS.md): sprites, animation commands,
+    drawing;
+  - [docs/AUDIO.md](docs/AUDIO.md): waves, MIDI, volumes.
 - `src\tools\lb7tool.c` inspects and extracts the archives (`info`, `list`, `disasm`, `anim`,
-  `extract`, `movie`, `icon`).
-- `tools\scripts\` contains the test tools: repeatable scenes (`run_scenes.ps1`), screenshots
-  and comparisons with the original game.
+  `hex`, `extract`, `movie`, `icon`).
+- `tools\scripts\` contains the test tools. Repeatable scene tests are event files (`--input`
+  format) in `tools\events\` of the game project, with the reference INI `ref.ini`:
+  `run_scenes.ps1` runs them (results, `trace.txt` and `coverage.txt` in `build\tests\`), and
+  `compare_scene.ps1` replays one in the port and in the original game under OTVDM and compares
+  the screenshots (`build\compare\<name>\`). The legacy names `tools\eventi\` and `rif.ini` are
+  still accepted.
 
 ## Third-party components
 

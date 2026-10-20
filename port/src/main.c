@@ -3,9 +3,9 @@
  * file names) is described by its profile games\<name>.h, copied by build.bat to build\game.h;
  * below, GAME = GAME_NAME (e.g. bowl).
  *
- * Current stage (Step 5.3): viewer for a 7LB archive with the game palette, bitmaps,
- * sounds (SDL2 mixer) and MIDI music (TinySoundFont + GeneralUser GS). Used to check graphics,
- * palette, scaling and audio ahead of the script interpreter.
+ * By default it runs the game (--game); with --viewer (or --entry) it is a viewer for a 7LB
+ * archive with the game palette, bitmaps, sounds (SDL2 mixer) and MIDI music (TinySoundFont +
+ * GeneralUser GS), used to check graphics, palette, scaling and audio.
  *
  *   GAME [--data FOLDER] [--lib FILE.BIN] [--entry N] [--800] [--scale N] [--sf2 FILE.sf2]
  *   GAME [--data FOLDER] [--lib FILE.BIN] [--sf2 FILE.sf2] --mixdown N out.wav   (audio test)
@@ -843,7 +843,7 @@ int main(int argc, char **argv)
 	SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON, "1");
 	SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON_SMALL, "1");
 	config_load(&g_cfg); /* <game>.ini; the command line takes precedence */
-	int w = g_cfg.width, h = g_cfg.height, scale = g_cfg.scale ? g_cfg.scale : 8; /* 0 = massima */
+	int w = g_cfg.width, h = g_cfg.height, scale = g_cfg.scale ? g_cfg.scale : 8; /* 0 = largest */
 	Viewer vw = { .libname = DEFAULT_LIB };
 	if (g_cfg.data[0])
 		datadir = g_cfg.data;

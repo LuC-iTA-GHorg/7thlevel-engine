@@ -1,7 +1,7 @@
 # 7LB archive format (7th Level Resource Library 1.2)
 
 Reconstructed from `TOPSYR01.DLL`, implemented in `port\src\lb7.c` and verified with `lb7tool` on all 10 `.BIN`
-files of the game. All values are little-endian; "word" = 16 bit, "dword" = 32 bit.
+files of the Upsy Daisy CD (and read by the port in all 9 games). All values are little-endian; "word" = 16 bit, "dword" = 32 bit.
 
 ## Header (0x142 bytes)
 
@@ -28,7 +28,7 @@ The sum of all header bytes (mod 256) is 0 (`Lib_ReadHeader`).
 | 0 | index: 10-byte entries `{word type, dword offset, dword size}` |
 | 1 | 80-byte records (`Lib_LoadKey1`) |
 | 2 | 28-byte records (`Lib_LoadKey2`) |
-| 3, 4 | tables loaded when the file is opened (key 3: initial values of the globals; key 4: to be analysed) |
+| 3, 4 | tables loaded when the file is opened (key 3: initial values of the globals, `{index, value}`; key 4: pool of the constant strings, see `SCRIPT_OPCODES.md`) |
 | 5 | in-memory data area: resources of type 10..18 have an offset relative to this area |
 | 6 | palette: `PALETTEENTRY` (R, G, B, flag), usually 236 colors mapped to indices 10..245 |
 | 7 | name table (`RESLOADNAMETABLE`) |
@@ -38,7 +38,7 @@ The sum of all header bytes (mod 256) is 0 (`Lib_ReadHeader`).
 | Type | Content | Status |
 |---|---|---|
 | 1 | bitmap | **decoded** |
-| 2 | large stream (2.6 MB in TOPSY.BIN): animation/movie data? | to be analysed |
+| 2 | movie stream and movie index (the two entries after a type-10 movie, "Movies" below; 2.6 MB in TOPSY.BIN) | **decoded** |
 | 4 | MIDI sequence | **decoded** (conversion to SMF verified) |
 | 9 | wave | **decoded** |
 | 10 | **movie** (script + stream + index, "Movies" below) | **decoded** |
@@ -53,7 +53,8 @@ The sum of all header bytes (mod 256) is 0 (`Lib_ReadHeader`).
 ### Bitmap (type 1)
 
 20-byte header: `+0` header size, `+2` width, `+4` stride, `+6` height,
-`+8` flags (`0x80` = RLE), `+0xC` and `+0xE` to be analyzed (hotspot and id?), `+0x10` runtime pointer.
+`+8` flags (`0x80` = RLE), `+0xA`/`+0xC` anchor point (signed, `SPRITES_ANIMATIONS.md`), `+0xE` not
+used by the port (an id?), `+0x10` runtime pointer.
 Rows are stored **bottom-up** as in Windows DIBs.
 
 - **RLE** (flag 0x80, `Bitmap_ExpandRLE`): after the header there are `height` words (row
@@ -94,7 +95,7 @@ TOPSUPSY and TOPSWORD: 16 tracks from 1 to 73 s, balanced note-on/note-off, cohe
 ### Script (type 16)
 
 Sequence of instructions: opcode word + 16-bit operands. Lengths derived from `Script_OpLength`
-(TOPSY.EXE 1008:C9D4) plus the control opcodes; all 2469 scripts of the 10 archives are
+(TOPSY.EXE 1008:C9D4) plus the control opcodes; all 2469 scripts of the 10 archives of the Upsy Daisy CD are
 walked exactly to the last byte (`lb7tool disasm`).
 
 Operand encoding (`Op26_JumpIfNot`, `Op2B_SwitchVar`):

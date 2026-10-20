@@ -44,12 +44,12 @@ The data of the in-memory entry can be modified: opcodes 04/07 write +0..+0x13 a
 copy (builtin 65) duplicates them. In the port they live in `RtObj` (`rt.h`), initialized from the file
 each time the library is opened.
 
-Members (`FUN_1008_6D44`): types **1, 12, 18** = frames (in order); **10** = text;
+Members (`FUN_1008_6D44`): types **1, 12, 18** = frames (in order); **10** = movie;
 **9** = default sound (`DAT_0E40`); **4** = default music (`DAT_0E42`); other types
 are only loaded (e.g. animations 15).
 
 Examples from TOPSY.BIN: sprite 54 = one frame, bitmap 71;
-sprite 63 = animation 64 + text 65.
+sprite 63 = animation 64 + movie 65.
 
 ### Lazy frames (byte +0x12)
 
@@ -142,7 +142,8 @@ Sequence of commands `word code` + arguments. Numeric arguments use **the same e
 script operands** (globals/locals/constants, resolved with the pointer to the
 globals in DS:044C of the DLL): animations can therefore depend on game variables.
 
-Verification: `lb7tool anim FILE.BIN` → **2230 animations aligned out of 2230** across the 10 archives.
+Verification: `lb7tool anim FILE.BIN` → **2230 animations aligned out of 2230** across the 10 archives
+of the Upsy Daisy CD. Every command is implemented in `sprite.c` (`run_anim`).
 
 | Cmd | Length | Uses* | Meaning | Certainty |
 |---|---|---|---|---|
@@ -150,12 +151,12 @@ Verification: `lb7tool anim FILE.BIN` → **2230 animations aligned out of 2230*
 | 02 | (n+4)·2 | 15059 | `{duration, state, n, n frames}`: **composite** frame made of several overlapping cels (−1 = skip), for `duration` | certain |
 | 03 | 2 | 0 | no case in 4AC2 nor in 471A: **one-tick no-op** (finishes, the next command runs on the following tick) | certain, ported |
 | 04 | 2 | 0 | FUN_1000_0426(0): only if a background **bitmap** exists (+0x448) and the sprite is visible: stamps the current image onto the background, hides the sprite (S_025) and **stops the animation** (S_010, the remaining commands are dropped); otherwise nothing | certain, ported |
-| 05 | 30 | 0 | curved path: parabola through three points (FUN_1000_1882 → 1820 → 1758, like builtin 73) | probable |
+| 05 | 30 | 0 | curved path `{steps, relative, xm, ym, x1, y1, (runtime)}`: parabola from the current position through (xm, ym) to (x1, y1), one step per movement interval like 09 (FUN_1000_471A case 5, FUN_1000_1882 → 1820 → 1758, like builtin 73) | certain, ported |
 | 06 | 8 | 568 | `{counter, repetitions, target}`: loop (jumps back to the offset) | certain |
-| 07 | 10 | 9 | (1000:42DE) | ? |
+| 07 | 10 | 9 | `{mirror x, mirror y, dx, dy}`: mirroring and relative move (FUN_1000_42DE → 383C) | certain, ported |
 | 08 | 2 | 291 | hides the sprite (S_025) | certain |
 | 09 | 24 | 12 | **movement** `{steps, speed, relative, x, y, (runtime: start, goal, step)}`: from where it is to the goal (+ position if relative) in `steps` steps, one per interval of cmd 11, rounded interpolation (FUN_1000_3F84); with `speed` ≠ 0 the value is in pixels per step (FUN_1000_4646); `steps`, `x`, `y` encoded, the two flags raw | certain, ported |
-| 0A | 8 | 0 | | |
+| 0A | 8 | 0 | position `{relative, x, y}` reached at the next movement deadline, like a one-step 09 (FUN_1000_4138) | certain, ported |
 | 0B | 6 | 836 | wait `{ms}` | certain |
 | 0C | 8 | 227 | immediate **position** `{x, y, relative}` (FUN_1000_4446 → 383C) | certain, ported |
 | 0D | 4 | 1012 | `{flag}`: cumulative timing (does not restart from "now") | certain |
@@ -168,9 +169,9 @@ Verification: `lb7tool anim FILE.BIN` → **2230 animations aligned out of 2230*
 | 14 | 2 | 0 | like 15/16 through FUN_1000_44DC (same guard): the EXE posts message 0x4C8 = run the deferred script `DAT_1502` (op 15) at the next loop iteration, then destroy the default sprite (see above); consumes the tick | certain, ported (`rt->post_4c8`, handled at the start of the next `rt_tick`) |
 | 15 | variable | 1284 | **event**: `+2` length, from `+4` a **script instruction** | certain |
 | 16 | 18 | 0* | **script call** `{script, n, up to 6 arguments}` (encoded operands, n raw): the DLL passes the command to the EXE (FUN_1000_44DC, length from table DS:0C0A), which performs the call immediately (FUN_1008_CC14 → CDAC). *Built by scripts with builtin 5B | certain, ported |
-| 17 | 12 | 7 | text (type 10 resource) (1000:4F68) | probable |
+| 17 | 12 | 7 | plays a **movie** (type 10 resource, [FORMAT_7LB.md](FORMAT_7LB.md) "Movies") (1000:4F68) | certain, ported |
 
-\* sum over the 10 archives.
+\* sum over the 10 archives of the Upsy Daisy CD.
 
 ### Events (command 0x15) — link with the game logic
 
@@ -189,7 +190,7 @@ Instructions found in events: `01` (call, 1092 times), `05` (show, 110), `03`, `
 `10`, `16`, `1C`, `1E`, `3F`.
 
 **In the port** events are **translated to C** by `scr2c` (functions `<lib>_animNNNN(rt, off)`
-in `port\game\*.c`, `anim_events` table of `RtLib`, 1284 events in total). The sprite engine
+in the generated C, `anim_events` table of `RtLib`, 1284 events in Upsy Daisy). The sprite engine
 plays the animation commands as data (frames, timings, movements) and for each
 0x15 command calls `rt_anim_event(rt, animation_id, offset)`: the logic stays C code.
 
@@ -201,15 +202,16 @@ The CD is started with **TUPSYPC.EXE**, which opens TUPSYPC.BIN: script 0 sets `
 port in `--game` mode therefore starts from TUPSYPC.BIN (it used to start from TOPSY.BIN and showed 5
 games, which live on other CDs).
 
-1. Script 0 → 58, 68, 55: INI, cursor, loads sprites 61, 63 and text 65.
-2. Script 56 (`show sprite 61, anim 62`) starts the sequence: sprite 63 shows text
+1. Script 0 → 58, 68, 55: INI, cursor, loads sprites 61, 63 and movie 65.
+2. Script 56 (`show sprite 61, anim 62`) starts the sequence: sprite 63 shows movie
    65, plays waves 59/60, waits, then runs script 57.
 3. Scripts 21–31 call script 32 with the area index; 32 does a fade and a
    `runindex` on list 33 = `link` to `topsupsy/topsword/topsmain/…`.
 4. Script 0 sets with opcode `0x15` the **deferred script** (`DAT_1502` = script 1), which the
    engine runs as soon as it regains control. Script 1 binds **keys** to scripts with `0C`
    (`+2` key, `+4` script, flag `+6` Ctrl, `+7` Shift, `+10` release) and calls script 56 (show 61/62).
-5. Sprites 61 and 63 have no bitmap: startup shows **text** (type 10) and plays waves.
+5. Sprites 61 and 63 have no bitmap: startup shows a **movie** (type 10, the publisher logo) and
+   plays waves.
 
 ## Drawing, position and background (verified against the original)
 
@@ -256,7 +258,8 @@ On-screen comparison between the original game running under OTVDM and the port.
   the screen origin `W/2` (FUN_1000_375A, S_026): it is centered like a sprite at 0,0, i.e. at
   `W/2 - (width-1)/2` = **1,1** at 800x600 (row and column 0 black). The port used to draw it at 0,0
   (fixed with the automatic comparison; sprites were already right).
-- **Visibility** (+0x56): set only by commands 01/02 (FUN_1000_360E) and 12 (S_043),
+- **Visibility** (+0x56): set only by commands 01/02 (FUN_1000_360E) and 12 (S_043), and by
+  the commands that bring the sprite back in view (05 09 0A 17, see "Implemented model"),
   cleared by 08 (S_025). Not even `show` with an animation (FUN_1008_A990 → S_039 1000:4E6C →
   S_010 + 471A) sets it: the sprite appears at the first 01/02/12 (fixed: the
   end credits, sprite 3078 with anim 3079 = `0D`, `0B` of 11.25 s, event, `01`, showed the
@@ -356,8 +359,9 @@ Per index entry (`RtObj.res_ld`, `res_ref`, cleared at every library open like F
 | other | 0 (the script ends) | nothing | never |
 
 Implicit loads that set the flag: running a script or list (`rt_enter`, D754/CC70), `show` with an
-animation (A990 → 740E(0x11) with members and 740E(0xF)), op 3F, op 60, builtin 65. Not yet: the
-implicit 740E(9)/740E(4) of the audio opcodes 08/50 (audio code, see `rt.c` op_wave). Lazy
+animation (A990 → 740E(0x11) with members and 740E(0xF)), op 3F, op 60, builtin 65. Not modelled
+(known difference): the implicit 740E(9)/740E(4) of the audio opcodes 08/50 do not set the
+flag (`rt.c` op_wave; see also [AUDIO.md](AUDIO.md), "Known approximations"). Lazy
 frames (+0x12) and the default sprite (+0x14) are described above.
 
 ## TOPSMAIN menu (verified flow)

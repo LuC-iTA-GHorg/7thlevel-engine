@@ -9,7 +9,8 @@ rem whose original EXE (GAME_EXE) is in the data folder.
 rem Folders (environment variables, all optional):
 rem   GAME_ROOT  project of the game (default: this folder). A game repository that has the engine
 rem              as a submodule in engine\ sets it to its own root and calls engine\build.bat.
-rem   GAME_DATA  files of YOUR copy of the game (*.BIN, *.EXE, *.DLL); default GAME_ROOT.
+rem   GAME_DATA  files of YOUR copy of the game (*.BIN, the original EXE, *.TTF if any; the
+rem              original DLLs are not used); default GAME_ROOT.
 rem Output in GAME_ROOT\build. Game logic: the scripts of the .BIN files are translated to C by
 rem scr2c. If GAME_ROOT\port\game\ exists (private development tree) it is used as is; otherwise
 rem the C files are generated into build\gamesrc\ from the game files.
@@ -84,7 +85,7 @@ set "GAMESRC=%OUT%\gamesrc"
 if not exist "%DATA%\%START%" (
 	echo.
 	echo The original game files were not found in "%DATA%" ^(%START% is missing^).
-	echo Copy the files of your game CD ^(*.BIN, *.EXE, *.DLL^) into the project root, or set
+	echo Copy the files of your game CD ^(*.BIN, *.EXE, *.TTF^) into the project root, or set
 	echo GAME_DATA to the folder that contains them, then run build.bat again.
 	goto :error
 )

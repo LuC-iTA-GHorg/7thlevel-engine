@@ -146,7 +146,7 @@ typedef struct {
 } Lb7Movie;
 typedef struct {            /* current composite frame */
 	Lb7Bitmap bmp;          /* width/stride/height and anchor w5/w6 */
-	uint8_t *pix;           /* stride*height, bottom-up; NULL = nessuno */
+	uint8_t *pix;           /* stride*height, bottom-up; NULL = none */
 } Lb7MovieFrame;
 int lb7_movie_open(const Lb7 *lb, unsigned id, Lb7Movie *m);
 static inline unsigned lb7_movie_rec_kind(const Lb7Movie *m, unsigned i) { return m->index[i * 8]; }

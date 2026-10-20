@@ -9,9 +9,9 @@ in a few handlers of `TOPSY.EXE`. The port splits it in two:
 - `port\src\audio.c` + `midi.c`: SDL2 mixer and TinySoundFont sequencer, which only render
   (gain, fades, MIDI tempo/mute).
 
-Addresses: `D:` = TOPSYA01 (the decompiled `TOPSYA01.c` of the dev repository), `X:` = TOPSY.EXE
-(the decompiled `TOPSY.c`). `W+x` = field of the DLL wave event (0x8E bytes),
-`ctx+x` = field of the DLL context.
+Addresses: `A_0xx` and `FUN_1000_xxxx` = TOPSYA01.DLL, `FUN_1008_xxxx` = TOPSY.EXE (names of
+the decompilation of the original program, which is not part of this repository). `W+x` = field
+of the DLL wave event (0x8E bytes), `ctx+x` = field of the DLL context.
 
 ## Wave events
 
@@ -60,10 +60,10 @@ A_004 runs at every sprite step) compute it from the voices being mixed instead:
 the frequent case. "Queued buffers" (`ctx+0xC`) is modelled as "some wave is playing" at the last
 tick, cleared by the flushes (also by opcode 09 without a CD, see below).
 
-Consequences visible in the shipped games: with the 18 Upsy scenes a few short low-priority waves
-(e.g. TOPSMAIN 8748, priority 1, during the first pass of overlay wave 8815, priority 10) are now
-refused, and a few looping waves are cut by an exclusive wave (TOPSMAIN 3090 by 5196); Bowl and
-Food show the same kind of differences.
+Consequences visible in the shipped games: in the Upsy Daisy scene tests a few short
+low-priority waves (e.g. TOPSMAIN 8748, priority 1, during the first pass of overlay wave 8815,
+priority 10) are refused, and a few looping waves are cut by an exclusive wave (TOPSMAIN 3090 by
+5196); Djali Bowling and Le Food Feud show the same kind of behaviour.
 
 ### End of a wave
 

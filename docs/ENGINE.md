@@ -6,7 +6,10 @@ and math utilities (`TOPSYU01`). A game is a set of resource libraries (`.BIN`, 
 containing bitmaps, sounds, MIDI, animations, sprites, texts and the game logic as bytecode
 scripts. This port reimplements the runtime in C11 + SDL2; its behaviour was reconstructed by
 analysing the original program and verified by comparing screenshots and timings with the
-original game.
+original game. Addresses and names in these documents refer to TOPSY.EXE and the DLLs of the
+Topsy Turvy CD; the EXEs of the other games run the same Runtime Player (the few differences
+are in the game profiles, `games\*.h`). The port reads only the `.BIN` libraries and, from the
+original EXE, the icon, the cursors and the INI section name: the original DLLs are not used.
 
 Detailed documents:
 - [FORMAT_7LB.md](FORMAT_7LB.md): library format, resource types, bitmap/wave/MIDI/movie codecs;
@@ -23,8 +26,9 @@ Detailed documents:
   with structured control flow; the generated code calls the runtime (`port\src\rt.c`):
   `rt_call` (script as a function), `rt_builtin` (engine functions), `rt_op` (instructions whose
   handler lives in the runtime), `G(n)` and `l[n]` for global and local variables.
-- At the end of a run `upsy.exe` lists the instructions, builtins and animation commands that
-  were met but are not implemented: new games must be checked for these.
+- At the end of a run `<game>.exe` lists the instructions, builtins and animation commands that
+  were met but not handled (every one of the original is implemented, so the lists are expected
+  to be empty; anything listed points to unexpected data).
 
 ## Main loop and timing
 
@@ -46,8 +50,9 @@ Detailed documents:
 - Sprite position: left = W/2 + x − ((w−1)/2 − hx); the background (instruction 06) is placed
   like a sprite at 0,0, i.e. at (1,1) on an 800×600 screen; mouse coordinates have their origin
   at W/2.
-- Visibility is set only by the animation commands 01, 02 and 12 and cleared by 08: neither
-  showing a sprite with an animation nor queueing commands makes it visible.
+- Visibility is set only by animation commands (01, 02 and 12, and the movements 05, 09, 0A and
+  the movie 17, which bring the sprite back in view) and cleared by 08 (and 04): neither showing
+  a sprite with an animation nor queueing commands makes it visible.
 - Builtin 5A executes a command immediately (clearing the queue only for 01 02 05 09 0A 16);
   5B appends it to the queue.
 

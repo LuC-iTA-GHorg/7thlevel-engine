@@ -1,5 +1,6 @@
-# Summary of what the game-logic port still lacks: still-generic instructions (rt_op) and
-# builtins used in port\game\*.c, with the original handler and its size in the decompiled code.
+# Summary of what the translated game logic (port\game\*.c of a development tree) leaves to the
+# runtime: instructions handled by rt_op, and builtins used that have no case in rt.c (none
+# expected now), with the original handler and its size in the decompiled code (ExportDecomp.java).
 # Usage: missing_report.ps1 [-Game port\game] [-Exe src\TOPSY\TOPSY.c] [-Runtime port\src\rt.c]
 param(
 	[string] $Game = 'port\game',

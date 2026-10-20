@@ -1,4 +1,4 @@
-# Overview of a game folder (Step 0): executables, engine, archives.
+# Overview of a game folder: executables, engine, archives.
 # Usage: survey.ps1 -GameDir <folder> [-Lb7Tool <path of lb7tool.exe>]
 param(
 	[Parameter(Mandatory)] [string] $GameDir,

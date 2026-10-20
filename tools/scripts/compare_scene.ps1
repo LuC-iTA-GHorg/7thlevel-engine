@@ -1,4 +1,4 @@
-# Phase 0.5: automatic port / original comparison on a test of tools\events\ (legacy folder
+# Automatic port / original comparison on a test of tools\events\ (legacy folder
 # name tools\eventi\ also used when tools\events\ does not exist).
 # 1. the port runs the test (fixed seed and step) and saves the screenshots in build\compare\<name>\p\;
 # 2. the original runs under OTVDM with the same events (orig_play.ps1) and the same starting INI

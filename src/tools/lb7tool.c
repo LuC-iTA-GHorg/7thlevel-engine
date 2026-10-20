@@ -5,7 +5,11 @@
  *   lb7tool info    <file.bin>             header, key resources, per-type statistics
  *   lb7tool list    <file.bin>             all entries with their first bytes
  *   lb7tool disasm  <file.bin> [n|all]     verify / disassemble the scripts (type 16)
- *   lb7tool extract <file.bin> <folder>    extracts the resources (bitmap -> .bmp, wave -> .wav)
+ *   lb7tool anim    <file.bin> [n]         verify / list the animations (type 15)
+ *   lb7tool hex     <file.bin> <n> [byte]  hex dump of an entry
+ *   lb7tool extract <file.bin> <folder>    extracts the resources (bitmap -> .bmp, wave -> .wav,
+ *                                          MIDI -> .mid)
+ *   lb7tool movie   <file.bin> <n> <folder> [every]  frames and audio of a movie (type 10)
  *   lb7tool icon    <file.exe> <file.ico>  icon of a 16-bit Windows EXE (NE), for build.bat
  */
 #include <stdint.h>
