@@ -41,6 +41,10 @@ typedef struct {
 	   the rectangle is enough, no check of transparent pixels) */
 	int hit_state, hit_box;
 	int16_t user;           /* field +0x44 of the DLL record, free word of the scripts (builtin 83/84) */
+	/* default sprite (byte +0x14, DAT_0E3E): is_def = it is the current one; orphan = kept from
+	   a closed library (FUN_1008_65F2: no resource id any more, its frames own their pixels);
+	   pinned = S_042: last slot of the draw list (on top of every layer), layer -1 */
+	int is_def, orphan, pinned;
 	SprFrame *frames;       /* malloc, one slot per member of the type 17 resource */
 	int n_frames;
 	int shown[SPR_MAX_LAYERS]; /* frames currently shown (indices), -1 = none */
@@ -203,6 +207,20 @@ int spr_bitmap_blit(SprWorld *w, unsigned dest, unsigned src, int dx, int dy);
 /* Unloading of a type 1 resource: if no loaded sprite holds it, the next use reads its original
  * pixels again (a sprite that is unloaded releases its members the same way). */
 void spr_bitmap_forget(SprWorld *w, unsigned id);
+/* Default sprite (byte +0x14, DAT_0E3E): 1 if there is one (current or kept from an old library). */
+int spr_has_default(SprWorld *w);
+/* FUN_1008_7372: with destroy the default sprite is removed (S_013(1, 1)); in any case no sprite
+ * is the default one any more. */
+void spr_default_reset(SprWorld *w, int destroy);
+/* Library close (FUN_1008_C5F8 -> S_042, FUN_1008_72B0 -> FUN_1008_65F2): the default sprite
+ * is taken out of the world before the library goes away; its frames are decoded into own
+ * memory (the original keeps the members' data alive), its movie stops, it loses its resource
+ * id and is pinned on top with layer -1. Call it while the old library is still open.
+ * 0 = no default sprite. */
+int spr_default_detach(SprWorld *w, Sprite *out);
+/* After the new library opened (FUN_1008_C5F8 -> S_004(1), FUN_1008_C794 -> S_042): the kept
+ * sprite goes back into the world with its loops broken (field +0x65). */
+void spr_default_attach(SprWorld *w, const Sprite *s);
 void spr_update(SprWorld *w, uint32_t now_ms);
 void spr_draw(SprWorld *w, Video *v);
 

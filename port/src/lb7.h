@@ -37,6 +37,7 @@ typedef struct {
 	uint16_t n_memchunks;      /* +0xC2 */
 	uint32_t memchunk_end[24]; /* +0x62, cumulative end of the in-memory chunks */
 	uint16_t n_colors;         /* +0xC4 */
+	uint16_t n_trans;          /* +0xC6: RESGETMAXTRANSCOLORS (DAT_1530), 0 in all shipped files */
 	uint16_t extra_slots;      /* +0xC8 */
 	uint8_t blocked;           /* +0xD0: block-based file (0xFFC blocks + link; unsupported) */
 	uint32_t n_entries;

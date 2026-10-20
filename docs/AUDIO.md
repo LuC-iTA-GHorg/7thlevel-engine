@@ -142,9 +142,11 @@ the next library (the port keeps them as events that cannot be addressed by id).
 destroyed (FUN_1008_7372(1)) by a later `link` with the stop-audio byte `+0x12`, or when another
 default sprite is loaded; a `link` with `+0x12` in the same library only clears the defaults, so
 the normal unload stops them. Every `link` also cancels all pending wave notifications (A_008).
-Not ported: the default sprite itself (it survives the link in the original, drawn on top) and
-its palette; the destroy done by message 0x4C8 (FUN_1008_EAD0, posted by opcodes 14/15). No
-shipped game sets byte `+0x14`.
+Message 0x4C8 (FUN_1008_EAD0, posted by script opcode 15 and animation command 14) destroys them
+with the default sprite after running the deferred script `DAT_1502`. The sprite itself (kept
+across the link, pinned on top of the draw list, own palette block) is described in
+[SPRITES_ANIMATIONS.md](SPRITES_ANIMATIONS.md#default-sprite-byte-0x14). No shipped game sets
+byte `+0x14`.
 
 ## MIDI
 

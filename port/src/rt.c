@@ -155,9 +155,15 @@ int rt_open_library(Rt *rt, const char *file)
 	}
 	char path[1024], err[512];
 	snprintf(path, sizeof(path), "%s/%s", datadir, file);
+	/* FUN_1008_C5F8: S_042 on the default sprite, then the bulk unload (FUN_1008_72B0) skips it
+	   (FUN_1008_65F2): it outlives the library whose data its frames use */
+	Sprite kept;
+	int keep = rt->spr && rt->lib.data ? spr_default_detach(rt->spr, &kept) : 0;
 	lb7_close(&rt->lib);
 	if (!lb7_open(&rt->lib, path, err, sizeof(err))) {
 		tr(rt, "!! %s\n", err);
+		if (keep)
+			spr_default_attach(rt->spr, &kept);
 		return 0;
 	}
 	if (rt->lib.n_entries != code->n_entries)
@@ -165,8 +171,11 @@ int rt_open_library(Rt *rt, const char *file)
 			code->n_entries);
 	int created;
 	LibState *s = state_for(rt, file, &created);
-	if (!s)
+	if (!s) {
+		if (keep)
+			spr_default_attach(rt->spr, &kept);
 		return 0;
+	}
 	/* G(5001..) shared: carried over from the previous library to the new one */
 	if (rt->g && rt->g != s->g)
 		memcpy(s->g + RT_GSHARED, rt->g + RT_GSHARED, (RT_NGLOBALS - RT_GSHARED) * sizeof(int16_t));
@@ -202,6 +211,8 @@ int rt_open_library(Rt *rt, const char *file)
 	if (rt->spr) {
 		spr_clear(rt->spr);
 		spr_init(rt->spr, &rt->lib, rt);
+		if (keep) /* S_004(1) after FUN_1008_C474, S_042 again in FUN_1008_C794 */
+			spr_default_attach(rt->spr, &kept);
 	}
 	/* resets of FUN_1008_C474: key table (DS:4BFB), clickable areas (DS:56FB),
 	   script of the sprite under the cursor, deferred call queue (DAT_40E0) */
@@ -223,6 +234,11 @@ int rt_open_library(Rt *rt, const char *file)
 	rt->joy_alt = 0;
 	sound_library_close(rt); /* FUN_1008_C5F8: resources unloaded, pending 0x52C removed, A_041 */
 	lb7_palette(&rt->lib, rt->pal_base); /* Lib_LoadPalette: DS:10E8 */
+	/* S_024: the DAT_1530 "trans" colours below 0xF6 (where a default sprite puts its palette)
+	   are taken from the current palette, so they survive the change */
+	for (int i = 0xF6 - (int)rt->lib.n_trans; i < 0xF6; i++)
+		if (i >= 0)
+			memcpy(rt->pal_base[i], rt->pal[i], 3);
 	memcpy(rt->pal, rt->pal_base, sizeof(rt->pal));
 	rt->pal_dirty = 1;
 	/* sprite input data: the library reopens the resources, hence the values from the file */
@@ -267,12 +283,20 @@ void rt_tick(Rt *rt, uint32_t now_ms)
 	rt->now_ms = now_ms;
 	sound_check(rt); /* end of sounds -> deferred call queue (message 0x52C) */
 	/* opcode 0x15: script to run as soon as the engine regains control (TOPSY.EXE
-	 * runs DAT_1502 and clears it: in TOPSY.BIN it is script 1, after startup) */
-	if (rt->v1502) {
-		unsigned id = (uint16_t)rt_operand(rt, rt->lstack, (uint16_t)rt->v1502);
-		rt->v1502 = 0;
-		tr(rt, "-- deferred script %u (DAT_1502)\n", id);
-		rt_run(rt, id, rt->lstack);
+	 * runs DAT_1502 and clears it: in TOPSY.BIN it is script 1, after startup). Opcode 15 and
+	 * animation command 14 post message 0x4C8, FUN_1008_EAD0: DAT_1502 runs, then a default
+	 * sprite that existed before it is destroyed with its sound and music (FUN_1008_7372(1)) */
+	if (rt->v1502 || rt->post_4c8) {
+		int had_def = rt->spr && spr_has_default(rt->spr);
+		rt->post_4c8 = 0;
+		if (rt->v1502) {
+			unsigned id = (uint16_t)rt_operand(rt, rt->lstack, (uint16_t)rt->v1502);
+			rt->v1502 = 0;
+			tr(rt, "-- deferred script %u (DAT_1502)\n", id);
+			rt_run(rt, id, rt->lstack);
+		}
+		if (had_def)
+			default_teardown(rt, 1);
 	}
 	if (rt->evq_n) { /* deferred calls (opcode 1E) */
 		uint16_t q[40][3];
@@ -2510,10 +2534,12 @@ static void midi_unload(Rt *rt, unsigned res)
 		rt->def_midi = 0;
 }
 
-/* FUN_1008_7372(flag): with flag the default sound and music are destroyed (A_013 / A_012);
- * the default variables are always cleared. */
+/* FUN_1008_7372(flag): with flag the default sprite (S_013(1, 1)), sound and music are destroyed
+ * (A_013 / A_012); the default variables are always cleared. */
 static void default_teardown(Rt *rt, int flag)
 {
+	if (rt->spr)
+		spr_default_reset(rt->spr, flag);
 	if (flag) {
 		for (int i = 0; i < N_WAVES; i++) {
 			struct RtWave *w = &rt->waves[i];
@@ -2539,6 +2565,19 @@ void rt_default_sprite(Rt *rt, unsigned sprite)
 	Lb7Entry e = lb7_entry(&rt->lib, sprite);
 	const uint8_t *d = lb7_entry_data(&rt->lib, e);
 	unsigned n = d && e.size >= 0x16 ? lb7_rd16(d + 6) : 0;
+	/* S_005(0, 1, data + 0x2A + 2 * members, count = word +0x0C, first = 0xF6 - DAT_1530):
+	   PALETTEENTRY {R, G, B, flag} records written into the current palette from index first
+	   and applied at once (AnimatePalette); refused if first + count > 256 */
+	if (d && e.size >= 0x16) {
+		int cnt = lb7_rd16(d + 0xC), first = 0xF6 - (int)rt->lib.n_trans;
+		uint32_t off = 0x2A + 2 * n;
+		if (cnt && first >= 0 && first + cnt <= 256 && off + (uint32_t)cnt * 4 <= e.size) {
+			for (int i = 0; i < cnt; i++)
+				memcpy(rt->pal[first + i], d + off + i * 4, 3);
+			rt->pal_dirty = 1;
+			tr(rt, "   default sprite %u: palette %d..%d\n", sprite, first, first + cnt - 1);
+		}
+	}
 	for (unsigned k = 0; k < n && 0x16 + k * 2 + 2 <= e.size; k++) { /* FUN_1008_6D44: the last ones */
 		unsigned m = (uint16_t)(lb7_rd16(d + 0x16 + k * 2) - 0x8ACF);
 		unsigned t = lb7_entry(&rt->lib, m).type;
@@ -2599,6 +2638,7 @@ static void sound_library_close(Rt *rt)
 		memset(&rt->music, 0, sizeof(rt->music));
 	}
 	rt->def_midi = 0;
+	rt->def_sprite = 0; /* the sprite, if any, was kept by rt_open_library (spr_default_detach) */
 	memset(rt->midi_ev, 0, sizeof(rt->midi_ev));
 	rt->wave_prio = 0; /* A_041 */
 	rt->wave_hook = 0; /* DAT_1540 = 0 in FUN_1008_C474 */

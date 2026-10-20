@@ -28,14 +28,17 @@ sprite engine is implemented in `port\src\sprite.c`.
 | +6 | number of members | certain |
 | +8 | **drag** start script (opcode 07) | certain |
 | +0xA | **release** script (opcode 07) | certain |
+| +0xC | number of palette entries of a default sprite (+0x14) | certain (FUN_1008_6BAA) |
 | +0xE | drawing **level** (operand, signed comparison: −1 = below all) | certain |
 | +0x10 | click disabled (opcode 04) | certain |
 | +0x11 | click on the whole **rectangle**, ignoring transparent pixels (S_058 → field +0x69 of the DLL); 73 sprites | certain |
 | +0x12 | flag: frames loaded on demand | probable |
 | +0x13 | draggable (opcode 07) | certain |
-| +0x14 | flag: "background" sprite (palette, `DAT_0E3E`) | probable |
+| +0x14 | flag: **default sprite** (`DAT_0E3E`, see below) | certain (0 in all files) |
 | +0x15 | **click state** (S_058 → field +0x52): 0 only if visible, 1 also if hidden (menu buttons), 2 never (cursor sprite) | certain |
 | +0x16 | list of **members** (encoded ids) | certain |
+| +0x16 + 2n | 20 bytes, unknown (0 in the files seen: every sprite has them, e.g. TOPSFINA 4831 = 0x16 + 16 + 20 = 58 bytes) | – |
+| +0x2A + 2n | **palette** of a default sprite: word +0xC × PALETTEENTRY {R, G, B, flag} | certain (FUN_1008_6BAA) |
 
 The data of the in-memory entry can be modified: opcodes 04/07 write +0..+0x13 and the runtime
 copy (builtin 65) duplicates them. In the port they live in `RtObj` (`rt.h`), initialized from the file
@@ -47,6 +50,49 @@ are only loaded (e.g. animations 15).
 
 Examples from TOPSY.BIN: sprite 54 = one frame, bitmap 71;
 sprite 63 = animation 64 + text 65.
+
+### Default sprite (byte +0x14)
+
+No shipped game sets the flag; the behaviour comes from TOPSY.EXE and TOPSYS01.DLL and is ported
+in full (`rt.c` `rt_default_sprite`/`default_teardown`/`rt_open_library`/`rt_tick`, `sprite.c`
+`spr_default_*`). The audio side (default sound and music) is in [AUDIO.md](AUDIO.md).
+
+- **Load** (FUN_1008_6C08, after S_009/S_034/S_058): FUN_1008_6BAA first runs
+  FUN_1008_7372(`DAT_5B76`) (a default sprite left over from the previous library is destroyed),
+  then `S_005(0, 1, data + 0x2A + 2n, count = word +0xC, first = 0xF6 − DAT_1530)`: count
+  PALETTEENTRY records into the DLL palette from index `first`, flag forced to 1 (PC_RESERVED),
+  applied at once (AnimatePalette, or the DLL colour table on a display with more than 256
+  colours); refused when `first + count > 256`. `DAT_1530` = header +0xC6
+  ([FORMAT_7LB.md](FORMAT_7LB.md)), 0 in every file, so the colours would land on 246…
+  Then `DAT_0E3E` = the sprite. Port: written into the current palette `rt->pal`.
+- **Library change** (FUN_1008_C5F8): `S_042(DAT_0E3E)` moves the sprite to the last slot of the
+  DLL draw list (ctx+6 = pinned: FUN_1000_10D4 inserts every later sprite before it, so it stays
+  **on top** of every layer) and sets its layer to −1; the bulk unload FUN_1008_72B0 (`DAT_07F4`
+  = 1) skips it (FUN_1008_6442 → FUN_1008_65F2 only clears the resource entry), so the DLL
+  sprite and its members' data stay alive while the library is closed. After FUN_1008_C474,
+  `S_004(1)` (field +0x65, as opcode 19: loops of command 06 end), and FUN_1008_C794 runs
+  `S_042` again. `Lib_LoadPalette` copies the current colours `0xF6 − DAT_1530` … `0xF5` into the
+  new library's palette (S_024), so the sprite's colours survive when the library reserves them.
+  Port: `spr_default_detach` before the old file is closed (frames decoded into own memory, texts
+  rendered, movie stopped, resource id dropped: no script can address or click it any more),
+  `spr_default_attach` after the new world is created (loops broken, pinned last in `cmp_layer`).
+- **Destruction**: FUN_1008_7372(1) → `S_013(1, 1, DAT_0E3E)` (hidden, images freed, out of the
+  list), together with the default sound and music. It runs when another default sprite is
+  loaded after a library change, on a `link` with +0x12 only if the sprite is a leftover, and on
+  **message 0x4C8** (FUN_1008_EAD0: runs the deferred script `DAT_1502`, then destroys the
+  default sprite if there was one when the message arrived). 0x4C8 is posted by script opcode 15
+  (with `DAT_0E18`, always 1 after the initialization) and by animation command 14. Since the
+  startup script of every library sets opcode 15, a kept sprite normally lasts until the first
+  tick of the next library (it covers the transition). A `link` with +0x12 in the sprite's own
+  library only clears `DAT_0E3E` (FUN_1008_7372(0)): the sprite becomes an ordinary one and is
+  unloaded with the library. Unloading it normally (FUN_1008_6442, replace 0x18 → FUN_1008_E3C2)
+  clears `DAT_0E3E`.
+- Other uses of `DAT_0E3E` in the EXE: FUN_1008_02F2 (a partial WM_PAINT excludes its rectangle
+  and repaints it alone with S_027: Windows painting detail, not needed with the port's full
+  redraw); FUN_1008_E4F4 (replace, images inherited: when the sprite handled there is `DAT_0E3E` every
+  member goes to the DLL one by one with S_002 instead of the final S_046(1); probable meaning:
+  the default sprite gets its own frame records; the port always copies the frame records, so
+  the two cases do not differ).
 
 ### `show` instruction (0x05, 8 bytes, `1008:A990`)
 
@@ -83,7 +129,7 @@ Verification: `lb7tool anim FILE.BIN` → **2230 animations aligned out of 2230*
 | 11 | 6 | 12 | `{movement interval, frame interval}` (S_041 → +0x20, S_036 → +0x24 if ≠ 0); the next step starts from now | certain, ported |
 | 12 | 4 | 0* | `{frame}` (−1 = current): shows the sprite (S_043, first 6AA4(0, 1) = back in view) | certain, ported |
 | 13 | 4 | 0 | no case in 4AC2 (one-tick no-op); the EXE handler (CD0E case 0x13, FUN_1008_E67E) is unreachable because the DLL never calls the callback for it | certain, ported |
-| 14 | 2 | 0 | like 15/16 through FUN_1000_44DC (same guard): the EXE posts message 0x4C8 = run the deferred script `DAT_1502` (op 15) at the next loop iteration; consumes the tick | certain, ported (`rt->v1502` is run at the start of the next `rt_tick`) |
+| 14 | 2 | 0 | like 15/16 through FUN_1000_44DC (same guard): the EXE posts message 0x4C8 = run the deferred script `DAT_1502` (op 15) at the next loop iteration, then destroy the default sprite (see above); consumes the tick | certain, ported (`rt->post_4c8`, handled at the start of the next `rt_tick`) |
 | 15 | variable | 1284 | **event**: `+2` length, from `+4` a **script instruction** | certain |
 | 16 | 18 | 0* | **script call** `{script, n, up to 6 arguments}` (encoded operands, n raw): the DLL passes the command to the EXE (FUN_1000_44DC, length from table DS:0C0A), which performs the call immediately (FUN_1008_CC14 → CDAC). *Built by scripts with builtin 5B | certain, ported |
 | 17 | 12 | 7 | text (type 10 resource) (1000:4F68) | probable |
@@ -275,9 +321,9 @@ Per index entry (`RtObj.res_ld`, `res_ref`, cleared at every library open like F
 
 Implicit loads that set the flag: running a script or list (`rt_enter`, D754/CC70), `show` with an
 animation (A990 → 740E(0x11) with members and 740E(0xF)), op 3F, op 60, builtin 65. Not yet: the
-implicit 740E(9)/740E(4) of the audio opcodes 08/50 (audio code, see `rt.c` op_wave). The default
-sprite (flag byte +0x14: own palette block, survives `link`) and lazy frames (+0x12) are not
-ported: both flags are 0 in every sprite of the 9 games.
+implicit 740E(9)/740E(4) of the audio opcodes 08/50 (audio code, see `rt.c` op_wave). Lazy
+frames (+0x12) are not ported: the flag is 0 in every sprite of the 9 games. The default sprite
+(+0x14) is described above.
 
 ## TOPSMAIN menu (verified flow)
 

@@ -420,7 +420,7 @@ int spr_background_transition(SprWorld *w, unsigned bmp800, unsigned bmp640, int
 static Sprite *find(SprWorld *w, unsigned id)
 {
 	for (int i = 0; i < SPR_MAX; i++)
-		if (w->spr[i].used && w->spr[i].id == id)
+		if (w->spr[i].used && w->spr[i].id == id && !w->spr[i].orphan) /* orphan: no id (65F2) */
 			return &w->spr[i];
 	return NULL;
 }
@@ -513,10 +513,13 @@ int spr_load(SprWorld *w, unsigned id)
 		   starts); here the event is created at the first opcode 08/50. Unloading the sprite
 		   destroys them (rt_unload). */
 	}
-	/* +0x14: default (background) sprite, FUN_1008_6BAA: its last wave/MIDI members survive a
-	   link (the sprite itself and its palette at 0xF6 - DAT_1530 are not ported) */
-	if (d[0x14] && w->rt)
+	/* +0x14: default sprite, FUN_1008_6BAA (old default destroyed if it is a leftover, palette
+	   block installed at 0xF6 - DAT_1530), then DAT_0E3E = this one; its last wave/MIDI members
+	   and the sprite itself survive a link (spr_default_detach) */
+	if (d[0x14] && w->rt) {
 		rt_default_sprite(w->rt, id);
+		s->is_def = 1;
+	}
 	/* current frame = the first one, even when hidden: needed by the hit test of sprites with
 	   state 1 (clickable even if invisible, e.g. the menu buttons of TOPSMAIN) */
 	s->n_shown = s->n_frames ? 1 : 0;
@@ -1049,10 +1052,13 @@ static void run_anim(SprWorld *w, Sprite *s)
 			cmd_done(s);
 			return;
 		case 0x14: /* {}: FUN_1000_44DC like 15/16 -> EXE 1008:CD0E posts message 0x4C8
-			(FUN_1008_EAD0: runs the deferred script DAT_1502 = rt->v1502, which rt_tick runs at
-			the start of the next tick). Blocked while an event runs or events are off */
+			(FUN_1008_EAD0: runs the deferred script DAT_1502 = rt->v1502, then destroys the default
+			sprite; rt_tick handles it at the start of the next tick). Blocked while an event runs
+			or events are off */
 			if (w->event_busy || w->events_off)
 				return;
+			if (w->rt)
+				w->rt->post_4c8 = 1;
 			s->pc += n;
 			return;
 		case 0x17: { /* movie {type 10 resource, ...} (TOPSYS01 4AC2 -> 4F68; TOPSY 1010) */
@@ -1388,6 +1394,8 @@ static int frame_pix(SprWorld *w, SprFrame *f)
 		return 1;
 	if (f->text_id)
 		return text_frame(w, f);
+	if (!f->data) /* frame of a kept default sprite that could not be decoded */
+		return 0;
 	if (w->rt && w->rt->trace) /* diagnostics: first draw of each frame */
 		fprintf(w->rt->trace, "%7u    [draw %ux%u anchor %d,%d cel %d,%d flags %X]\n", w->now_ms, f->bmp.width,
 			f->bmp.height, f->bmp.w5, f->bmp.w6, f->cx, f->cy, f->bmp.flags);
@@ -1800,7 +1808,8 @@ unsigned spr_hit(SprWorld *w, int x, int y)
 	for (int i = 0; i < SPR_MAX; i++) {
 		Sprite *s = &w->spr[i];
 		/* S_029: state 2 never; otherwise only if visible, or state 1 */
-		if (s->used && s->hit_state != 2 && (s->visible || s->hit_state == 1))
+		/* the kept default sprite has no resource any more: nothing to click */
+		if (s->used && !s->orphan && s->hit_state != 2 && (s->visible || s->hit_state == 1))
 			order[n++] = s;
 	}
 	qsort(order, (size_t)n, sizeof(order[0]), cmp_layer);
@@ -1834,6 +1843,8 @@ void spr_break_loops(SprWorld *w, unsigned id, int on)
 static int cmp_layer(const void *a, const void *b)
 {
 	const Sprite *x = *(Sprite *const *)a, *y = *(Sprite *const *)b;
+	if (x->pinned != y->pinned) /* S_042: the pinned sprite keeps the last slot (FUN_1000_10D4) */
+		return x->pinned ? 1 : -1;
 	if (x->layer != y->layer)
 		return x->layer < y->layer ? -1 : 1;
 	return x->seq < y->seq ? -1 : x->seq > y->seq;
@@ -2118,4 +2129,70 @@ void spr_bitmap_forget(SprWorld *w, unsigned id)
 {
 	if (id)
 		edited_release(w, id);
+}
+
+int spr_has_default(SprWorld *w)
+{
+	for (int i = 0; i < SPR_MAX; i++)
+		if (w->spr[i].used && w->spr[i].is_def)
+			return 1;
+	return 0;
+}
+
+void spr_default_reset(SprWorld *w, int destroy)
+{
+	for (int i = 0; i < SPR_MAX; i++) {
+		Sprite *s = &w->spr[i];
+		if (!s->used || !s->is_def)
+			continue;
+		if (destroy) {
+			if (w->rt && w->rt->trace)
+				fprintf(w->rt->trace, "%7u    [default sprite %u%s destroyed]\n", w->now_ms, s->id,
+					s->orphan ? " (old library)" : "");
+			spr_free(w, s); /* S_013(1, 1): hidden, images freed, out of the list */
+			edited_release(w, 0);
+		}
+		else
+			s->is_def = 0;
+	}
+}
+
+int spr_default_detach(SprWorld *w, Sprite *out)
+{
+	Sprite *s = NULL;
+	for (int i = 0; i < SPR_MAX && !s; i++)
+		if (w->spr[i].used && w->spr[i].is_def)
+			s = &w->spr[i];
+	if (!s)
+		return 0;
+	movie_stop(w, s); /* the movie reads the old library's file */
+	for (int i = 0; i < s->n_frames; i++) {
+		SprFrame *f = &s->frames[i];
+		(void)frame_pix(w, f); /* texts are rendered now: their resource goes away */
+		f->data = NULL;
+		f->size = 0;
+		f->text_id = 0;
+	}
+	s->orphan = 1;
+	s->pinned = 1; /* S_042 at the start of FUN_1008_C5F8 */
+	s->layer = -1;
+	if (w->rt && w->rt->trace)
+		fprintf(w->rt->trace, "%7u    [default sprite %u kept across the library change, %d frames]\n", w->now_ms,
+			s->id, s->n_frames);
+	*out = *s;
+	memset(s, 0, sizeof(*s)); /* its memory now belongs to out */
+	return 1;
+}
+
+void spr_default_attach(SprWorld *w, const Sprite *s)
+{
+	for (int i = 0; i < SPR_MAX; i++)
+		if (!w->spr[i].used) {
+			w->spr[i] = *s;
+			w->spr[i].seq = ++w->seq;
+			w->spr[i].break_loops = 1; /* S_004(1) after FUN_1008_C474 */
+			return;
+		}
+	Sprite tmp = *s;
+	spr_free(w, &tmp);
 }

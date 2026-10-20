@@ -190,6 +190,9 @@ struct Rt {
 	/* default sprite (byte +0x14, DAT_0E3E/0E40/0E42) and DAT_5B76 */
 	uint16_t def_sprite, def_wave, def_midi;
 	uint8_t def_old;           /* DAT_5B76: set by a library change, the defaults are leftovers */
+	/* message 0x4C8 posted (animation command 14; opcode 15 posts it too, with DAT_1502):
+	   FUN_1008_EAD0 at the next tick runs DAT_1502 and destroys the default sprite */
+	uint8_t post_4c8;
 	uint8_t waves_frozen;      /* waves held: paused (builtin 70 / Pause) or window inactive */
 	int waves_paused, midi_paused;  /* builtin 70 / counter of builtin 99 (A_025) */
 	uint32_t waves_paused_at, midi_paused_at;

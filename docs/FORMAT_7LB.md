@@ -14,6 +14,7 @@ files of the game. All values are little-endian; "word" = 16 bit, "dword" = 32 b
 | 0x62 | dword[24] | cumulative end of the chunks of the in-memory data area (key 5) |
 | 0xC2 | word | number of in-memory chunks |
 | 0xC4 | word | palette colors (236) |
+| 0xC6 | word | "trans" colors (`RESGETMAXTRANSCOLORS`, TOPSYR01 1000:18C0 = library struct +0x14E = header +0xC6; `DAT_1530`): the range `0xF6 − n` … `0xF5` keeps the colours of the current palette across a library change (S_024 in `Lib_LoadPalette`) and receives the palette of a default sprite. 0 in all files; in the port `Lb7.n_trans` |
 | 0xC8 | word | extra slots in the index (resources created at runtime: 150 in all files). `RESCOPYRESOURCE` copies an entry into the first free slot after the ones of the file (builtin 65), `RESDELETERESOURCE` frees only these slots (builtin 66); in the port `lb7_copy_entry`/`lb7_delete_entry` |
 | 0xD0 | byte | "block" file (blocks of 0xFFC bytes + a dword pointing to the next block); 0 in all files |
 | 0xE2 | {dword off, dword size}[12] | key resource table |

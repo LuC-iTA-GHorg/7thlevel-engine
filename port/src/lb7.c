@@ -60,6 +60,7 @@ int lb7_open(Lb7 *lb, const char *path, char *err, size_t errlen)
 	for (int i = 0; i < lb->n_memchunks && i < 24; i++)
 		lb->memchunk_end[i] = rd32(h + 0x62 + i * 4);
 	lb->n_colors = rd16(h + 0xC4);
+	lb->n_trans = rd16(h + 0xC6);
 	lb->extra_slots = rd16(h + 0xC8);
 	lb->blocked = h[0xD0];
 	if ((uint64_t)lb->key_off[LB7_KEY_INDEX] + lb->key_size[LB7_KEY_INDEX] > lb->size) {
