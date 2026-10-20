@@ -32,7 +32,7 @@ sprite engine is implemented in `port\src\sprite.c`.
 | +0xE | drawing **level** (operand, signed comparison: −1 = below all) | certain |
 | +0x10 | click disabled (opcode 04) | certain |
 | +0x11 | click on the whole **rectangle**, ignoring transparent pixels (S_058 → field +0x69 of the DLL); 73 sprites | certain |
-| +0x12 | flag: frames loaded on demand | probable |
+| +0x12 | flag: **lazy frames**, bitmaps and cels loaded only when shown (see below) | certain (0 in all files) |
 | +0x13 | draggable (opcode 07) | certain |
 | +0x14 | flag: **default sprite** (`DAT_0E3E`, see below) | certain (0 in all files) |
 | +0x15 | **click state** (S_058 → field +0x52): 0 only if visible, 1 also if hidden (menu buttons), 2 never (cursor sprite) | certain |
@@ -50,6 +50,42 @@ are only loaded (e.g. animations 15).
 
 Examples from TOPSY.BIN: sprite 54 = one frame, bitmap 71;
 sprite 63 = animation 64 + text 65.
+
+### Lazy frames (byte +0x12)
+
+No shipped game sets the flag; ported from TOPSY.EXE and TOPSYS01.DLL (`rt.c` `rt_load` case 17,
+`rt_lazy_frame`, `op_replace`; `sprite.c` `spr_set_lazy`/`resolve_frame`). It only changes when
+the bitmaps and cels of the sprite are loaded and how many holders (`res_ref`, entry +4) they
+have, which scripts see through "is loaded" (FUN_1008_74FA) and builtin 7D sees through the
+lifetime of a changed bitmap; what is drawn is the same.
+
+- **Load** (FUN_1008_6D44 with param_1 = byte +0x12): members of type 1 and 12 are not loaded
+  through 740E. A member already resident becomes a direct frame pointer with one more holder;
+  any other one becomes a record `{id, 0}` (no load, no holder). Texts (18), movies (10) and the
+  other types are loaded as usual. S_003 (S_083) copies the records as they are and, when the
+  frame list was empty, resolves frame 0 at once (FUN_1000_128C).
+- **Resolution** (TOPSYS01 FUN_1000_6674): when a `{id, 0}` frame becomes current (frame 0 at
+  load, frame steps FUN_1000_6B04 of commands 01/10/12, the parts of a composite frame
+  FUN_1000_0D42) the DLL looks the id up in the sprite's cache: up to 20 entries
+  `{offset, segment, id}` at sprite +0x30 (count +0x48), most recently used first
+  (FUN_1000_650E). On a miss it calls the EXE through the callback registered with S_059
+  (FUN_1000_6598 → `ctx+0x14` = FUN_1008_7780(0, id)): the bitmap (6756) or cel (67E6, which
+  also loads its bitmap and holds it) is loaded and gets one more holder; the result goes to the
+  front of the cache. With 20 entries already, the oldest is released (FUN_1000_649C → 665A →
+  FUN_1008_7780(1, id): one holder less, at 0 the resource is unloaded through 722A). The
+  record in the frame list stays `{id, 0}`: an image evicted from the cache is loaded again the
+  next time it is shown.
+- **Unload** (FUN_1008_6442 → 6502): the cache is dropped without callbacks and every member
+  loses one holder if it has any, exactly as without the flag. Quirk kept: a member that was
+  never resolved, or appears twice, still loses a holder (only if the count is not 0).
+  **Opcode 18** unloading the old sprite goes through FUN_1008_E1D2 instead: with the flag a
+  member image repeated in the list loses its holder only once (then E47A: one less if loaded,
+  unloaded at 0). The default sprite destroyed by FUN_1008_7372 (S_013(1, …) → FUN_1000_119A
+  → 6618) releases its cache entries through the callback; the port skips this for a sprite
+  kept from an old library, whose ids would name resources of the new library.
+- **Replace inheriting images** (FUN_1008_E4F4, opcode 18 when the new sprite has no frames):
+  every image shown by the old sprite (S_023) gets one more holder and is added as a direct
+  pointer (S_002), never as `{id, 0}`. This holds with or without the flag.
 
 ### Default sprite (byte +0x14)
 
@@ -316,14 +352,13 @@ Per index entry (`RtObj.res_ld`, `res_ref`, cleared at every library open like F
 | 11, 14, 15, 16 | flag set | nothing (stay until the library switch) | flag |
 | 12 | loads its bitmap, bitmap `res_ref`++ | if loaded and not held: bitmap `res_ref`−−, bitmap unloaded | flag |
 | 13 | loads every member, stops at the first failure | unloads every member | never |
-| 17 | sprite + every member in order (failure of one = load fails, rollback); members 1/10/12/18 `res_ref`++ | sprite destroyed, members 1/10/12/18 `res_ref`−−, every member unloaded (wave/MIDI members stop) | sprite exists |
+| 17 | sprite + every member in order (failure of one = load fails, rollback); members 1/10/12/18 `res_ref`++ (byte +0x12: bitmaps and cels only when shown, see "Lazy frames") | sprite destroyed, members 1/10/12/18 `res_ref`−−, every member unloaded (wave/MIDI members stop) | sprite exists |
 | other | 0 (the script ends) | nothing | never |
 
 Implicit loads that set the flag: running a script or list (`rt_enter`, D754/CC70), `show` with an
 animation (A990 → 740E(0x11) with members and 740E(0xF)), op 3F, op 60, builtin 65. Not yet: the
 implicit 740E(9)/740E(4) of the audio opcodes 08/50 (audio code, see `rt.c` op_wave). Lazy
-frames (+0x12) are not ported: the flag is 0 in every sprite of the 9 games. The default sprite
-(+0x14) is described above.
+frames (+0x12) and the default sprite (+0x14) are described above.
 
 ## TOPSMAIN menu (verified flow)
 

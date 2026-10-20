@@ -455,6 +455,9 @@ static RtObj *obj_of(Rt *rt, unsigned id)
 
 /* > 0 while the members of a sprite/cel/list are (un)loaded: not traced one by one */
 static int res_quiet;
+/* FUN_1008_E1D2 (opcode 18 unloading the old sprite) instead of FUN_1008_6502: with the sprite's
+   byte +0x12 a member image repeated in the list loses its holder only once */
+static int replace_unload;
 
 static RtObj *res_of(Rt *rt, unsigned id)
 {
@@ -535,7 +538,10 @@ int rt_load(Rt *rt, unsigned id)
 	}
 	case 17: { /* FUN_1008_6C08 + 6D44: the sprite, then its members in order (a member that
 		cannot be loaded makes the whole load fail); frames, cels, texts and movies count one
-		more holder (+4). Wave/MIDI members are only created (no sound starts). */
+		more holder (+4). Wave/MIDI members are only created (no sound starts). With byte +0x12
+		(lazy frames) bitmaps and cels are not loaded: one already resident is used with a holder
+		more, any other one becomes a record {id, 0} that the DLL resolves when it is shown
+		(rt_lazy_frame); then S_003 resolves frame 0 (FUN_1000_128C). */
 		if (!res_quiet)
 			tr(rt, "   load %u (type %u)\n", id, type);
 		(void)obj_of(rt, id);
@@ -545,10 +551,21 @@ int rt_load(Rt *rt, unsigned id)
 			return 1;
 		if (!spr_load(rt->spr, id))
 			return 0;
+		Lb7Entry se = lb7_entry(&rt->lib, id);
+		const uint8_t *sd = se.size > 0x12 ? lb7_entry_data(&rt->lib, se) : NULL;
+		int lazy = sd && sd[0x12];
 		uint16_t m[256];
 		unsigned n = sprite_members(rt, id, m, 256);
 		for (unsigned k = 0; k < n; k++) {
 			unsigned t = lb7_entry(&rt->lib, m[k]).type;
+			if (lazy && (t == 1 || t == 12)) {
+				RtObj *mo = res_of(rt, m[k]);
+				if (mo && mo->res_ld)
+					mo->res_ref++;
+				else
+					spr_set_lazy(rt->spr, id, m[k]);
+				continue;
+			}
 			res_quiet++;
 			int ok = rt_load(rt, m[k]);
 			res_quiet--;
@@ -560,6 +577,8 @@ int rt_load(Rt *rt, unsigned id)
 			if (mo && (t == 1 || t == 10 || t == 12 || t == 18))
 				mo->res_ref++;
 		}
+		if (lazy)
+			spr_resolve(rt->spr, id);
 		return 1;
 	}
 	default:
@@ -581,10 +600,18 @@ int rt_unload(Rt *rt, unsigned id)
 		sprite_members_unload(rt, id); /* traces the wave/MIDI members that stop */
 		uint16_t m[256];
 		unsigned n = sprite_members(rt, id, m, 256);
+		Lb7Entry se = lb7_entry(&rt->lib, id);
+		const uint8_t *sd = se.size > 0x12 ? lb7_entry_data(&rt->lib, se) : NULL;
+		int dedup = replace_unload && sd && sd[0x12];
 		for (unsigned k = 0; k < n; k++) {
 			unsigned t = lb7_entry(&rt->lib, m[k]).type;
 			RtObj *mo = res_of(rt, m[k]);
-			if (mo && mo->res_ref && (t == 1 || t == 10 || t == 12 || t == 18))
+			int img = t == 1 || t == 10 || t == 12 || t == 18, seen = 0;
+			for (unsigned j = 0; dedup && img && j < k && !seen; j++)
+				seen = m[j] == m[k];
+			if (seen)
+				continue;
+			if (mo && mo->res_ref && img)
 				mo->res_ref--;
 			if (t != 17) {
 				res_quiet++;
@@ -2558,6 +2585,32 @@ static void default_teardown(Rt *rt, int flag)
 	rt->def_old = 0;
 }
 
+int rt_lazy_frame(Rt *rt, unsigned id, int release)
+{
+	unsigned t = lb7_entry(&rt->lib, id).type;
+	RtObj *o = res_of(rt, id);
+	if (!release) {
+		if (t != 1 && t != 12)
+			return 0;
+		res_quiet++;
+		int ok = rt_load(rt, id);
+		res_quiet--;
+		if (!ok)
+			return 0;
+		if (o)
+			o->res_ref++;
+		tr(rt, "   lazy frame %u (type %u) loaded, %u holders\n", id, t, o ? o->res_ref : 0);
+		return 1;
+	}
+	if (o && o->res_ref && !--o->res_ref) {
+		tr(rt, "   lazy frame %u (type %u) released\n", id, t);
+		res_quiet++;
+		(void)rt_unload(rt, id);
+		res_quiet--;
+	}
+	return 1;
+}
+
 void rt_default_sprite(Rt *rt, unsigned sprite)
 {
 	default_teardown(rt, rt->def_old); /* FUN_1008_6BAA */
@@ -3088,10 +3141,21 @@ static int op_replace(Rt *rt, int16_t *l, const uint8_t *b)
 	tr(rt, "   replace sprite %u with %u%s\n", old_id, new_id, b[10] && new_id != old_id ? " (unload the old one)" : "");
 	if (new_id != old_id) {
 		(void)obj_of(rt, new_id);
-		if (!spr_replace(sw, old_id, new_id))
+		uint16_t shown[SPR_MAX_LAYERS];
+		int ns = spr_frame_ids(sw, old_id, shown, SPR_MAX_LAYERS);
+		int r = spr_replace(sw, old_id, new_id);
+		if (!r)
 			return 0;
-		if (b[10])
+		for (int k = 0; r == 2 && k < ns; k++) { /* FUN_1008_E4F4: the images shown, +4 each */
+			RtObj *so = res_of(rt, shown[k]);
+			if (so)
+				so->res_ref++;
+		}
+		if (b[10]) {
+			replace_unload = 1;
 			(void)rt_unload(rt, old_id);
+			replace_unload = 0;
+		}
 	}
 	uint16_t anim = lb7_rd16(b + 6); /* raw 0 = fixed frame (1008:A990) */
 	if (!rt_show(rt, new_id, anim ? (uint16_t)rt_operand(rt, l, anim) : 0, b[11]))

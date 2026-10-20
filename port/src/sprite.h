@@ -27,6 +27,8 @@ typedef struct {
 	Lb7Bitmap bmp;
 	uint16_t text_id;       /* != 0: text member (type 18), rendered with text.c when drawing */
 	uint16_t entry;         /* index entry of the member (diagnostics) */
+	uint8_t lazy;           /* sprite byte +0x12: record {id, 0} of FUN_1008_6D44 (bitmap/cel not
+	                           resident at load), resolved through the EXE when it is shown */
 } SprFrame;
 
 typedef struct {
@@ -45,6 +47,10 @@ typedef struct {
 	   a closed library (FUN_1008_65F2: no resource id any more, its frames own their pixels);
 	   pinned = S_042: last slot of the draw list (on top of every layer), layer -1 */
 	int is_def, orphan, pinned;
+	/* lazy frames resolved (TOPSYS01 FUN_1000_6674): MRU cache of resource ids, most recent
+	   first, at most 20 (sprite +0x30/+0x48); each one holds the resource once */
+	uint16_t lz_id[20];
+	int lz_n;
 	SprFrame *frames;       /* malloc, one slot per member of the type 17 resource */
 	int n_frames;
 	int shown[SPR_MAX_LAYERS]; /* frames currently shown (indices), -1 = none */
@@ -199,7 +205,7 @@ void spr_set_text_color(SprWorld *w, unsigned id, uint8_t color);
 /* Opcode 18 (TOPSY FUN_1008_E06C): the new sprite takes the old one's place in the drawing
  * order; if it has no frames it inherits the old one's images, position and mirroring, otherwise
  * the old one is hidden. Unloading the old one is up to the caller. 0 = error. */
-int spr_replace(SprWorld *w, unsigned old_id, unsigned new_id);
+int spr_replace(SprWorld *w, unsigned old_id, unsigned new_id); /* 2 = images inherited */
 /* Builtin 7D (FUN_1008_708A -> S_019 = TOPSYS01 1000:2890): draws bitmap src (type 1, or a text
  * of type 18) into bitmap dest (type 1); both rectangles are centred on their anchors, src is
  * shifted by (dx, dy) and clipped to dest; index 0 of src is transparent. 1 = something drawn. */
@@ -207,6 +213,12 @@ int spr_bitmap_blit(SprWorld *w, unsigned dest, unsigned src, int dx, int dy);
 /* Unloading of a type 1 resource: if no loaded sprite holds it, the next use reads its original
  * pixels again (a sprite that is unloaded releases its members the same way). */
 void spr_bitmap_forget(SprWorld *w, unsigned id);
+/* Sprite byte +0x12 (FUN_1008_6D44): the frames of member id (bitmap or cel) were not loaded
+ * with the sprite; they are resolved (rt_lazy_frame) when they become current. */
+void spr_set_lazy(SprWorld *w, unsigned sprite, unsigned member);
+/* Resolves the current frames of the sprite (FUN_1000_128C: frame 0 when S_003 fills an empty
+ * frame list). */
+void spr_resolve(SprWorld *w, unsigned sprite);
 /* Default sprite (byte +0x14, DAT_0E3E): 1 if there is one (current or kept from an old library). */
 int spr_has_default(SprWorld *w);
 /* FUN_1008_7372: with destroy the default sprite is removed (S_013(1, 1)); in any case no sprite

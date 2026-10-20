@@ -331,6 +331,10 @@ int rt_movie_audio(Rt *rt, const Lb7Wave *w, int16_t *pcm, uint32_t samples);
 void rt_movie_audio_end(Rt *rt, int voice);
 /* Sprite with byte +0x14 loaded (FUN_1008_6BAA + end of 6D44): default sound/music. */
 void rt_default_sprite(Rt *rt, unsigned sprite);
+/* FUN_1008_7780, callback of the sprite DLL for the lazy frames (sprite byte +0x12): release = 0
+ * loads bitmap/cel id (6756 / 67E6) and adds a holder (0 = failure, other types); release = 1
+ * removes the holder and unloads the resource at 0 (722A). */
+int rt_lazy_frame(Rt *rt, unsigned id, int release);
 int rt_run_random(Rt *rt, int16_t *l, uint8_t *last, unsigned n, const uint16_t *ids); /* 0x16 */
 int rt_run_next(Rt *rt, int16_t *l, uint8_t *last, unsigned n, const uint16_t *ids);   /* 0x17 */
 int rt_run_random_list(Rt *rt, int16_t *l, uint8_t *last, unsigned list);            /* 0x16 list */

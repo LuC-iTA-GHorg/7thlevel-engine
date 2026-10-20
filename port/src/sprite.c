@@ -18,6 +18,7 @@ static void sprite_images(SprWorld *w, const Video *v, Sprite *s, SprDrawFn fn, 
 static int cmp_layer(const void *a, const void *b);
 static uint8_t *bitmap_pixels(SprWorld *w, const uint8_t *data, uint32_t size, const Lb7Bitmap *b);
 static void edited_release(SprWorld *w, unsigned id);
+static void resolve_shown(SprWorld *w, Sprite *s);
 static void add_stamp(void *ctx, const uint8_t *pix, const Lb7Bitmap *b, int l, int t, int tr, int fx, int fy);
 
 static void movie_stop(SprWorld *w, Sprite *s)
@@ -837,6 +838,7 @@ static void cycle_step(SprWorld *w, Sprite *s)
 	if (s->cyc_cur >= 0 && s->cyc_cur < s->n_frames) {
 		s->shown[0] = s->cyc_cur;
 		s->n_shown = 1;
+		resolve_shown(w, s);
 	}
 	if (s->cyc_up)
 		s->cyc_cur = s->cyc_cur + 1 > s->cyc_to ? s->cyc_from : s->cyc_cur + 1;
@@ -911,6 +913,7 @@ static void run_anim(SprWorld *w, Sprite *s)
 			s->step_frame++;
 			s->shown[0] = f;
 			s->n_shown = 1;
+			resolve_shown(w, s);
 			s->visible = 1; /* FUN_1000_360E: +0x56 = 1, even after a cmd 08 */
 			if (--s->step_left > 0) {
 				int dur = (int16_t)rd16(p + 8) == -1 ? 0 : anim_val(w, rd16(p + 8));
@@ -999,6 +1002,7 @@ static void run_anim(SprWorld *w, Sprite *s)
 			}
 			s->n_shown = nsh;
 			memcpy(s->shown, sh, sizeof(int) * (size_t)nsh);
+			resolve_shown(w, s); /* FUN_1000_0D42: the parts of the composite frame */
 			s->waiting = 1;
 			return;
 		}
@@ -1089,6 +1093,7 @@ static void run_anim(SprWorld *w, Sprite *s)
 				s->shown[0] = 0;
 				s->n_shown = 1;
 			}
+			resolve_shown(w, s);
 			s->pc += n;
 			cmd_done(s);
 			return;
@@ -1205,6 +1210,7 @@ static void run_anim(SprWorld *w, Sprite *s)
 			if (!s->cyc_on) { /* a single frame: +0x5B = 1 shows it at the next redraw */
 				s->shown[0] = (int)from;
 				s->n_shown = 1;
+				resolve_shown(w, s);
 			}
 			s->cyc_next = w->now_ms;
 			continue;
@@ -1520,6 +1526,7 @@ int spr_replace(SprWorld *w, unsigned old_id, unsigned new_id)
 	o = find(w, old_id); /* spr_load does not move sprites, but just to be safe */
 	if (o != n)
 		stop_anim(w, o); /* S_010: the old one's animation (and queued commands) stops */
+	int inherited = 0;
 	if (!n->n_frames && o->n_frames) { /* FUN_1008_E4F4 + S_045: inherits the images */
 		SprFrame *f = calloc((size_t)o->n_frames, sizeof(SprFrame));
 		if (!f)
@@ -1527,6 +1534,7 @@ int spr_replace(SprWorld *w, unsigned old_id, unsigned new_id)
 		for (int i = 0; i < o->n_frames; i++) {
 			f[i] = o->frames[i];
 			f[i].pix = NULL; /* decoded again: the cache stays with the old one */
+			f[i].lazy = 0;   /* S_002: direct pointers, not {id, 0} records */
 		}
 		free(n->frames);
 		n->frames = f;
@@ -1539,6 +1547,7 @@ int spr_replace(SprWorld *w, unsigned old_id, unsigned new_id)
 		n->flip_y = o->flip_y;
 		n->visible = o->visible;
 		o->visible = 0;
+		inherited = 1;
 	}
 	else
 		o->visible = 0; /* S_025 */
@@ -1550,7 +1559,7 @@ int spr_replace(SprWorld *w, unsigned old_id, unsigned new_id)
 		o->layer = l;
 		o->seq = q;
 	}
-	return 1;
+	return inherited ? 2 : 1;
 }
 
 int spr_loaded(SprWorld *w, unsigned id)
@@ -2149,7 +2158,12 @@ void spr_default_reset(SprWorld *w, int destroy)
 			if (w->rt && w->rt->trace)
 				fprintf(w->rt->trace, "%7u    [default sprite %u%s destroyed]\n", w->now_ms, s->id,
 					s->orphan ? " (old library)" : "");
-			spr_free(w, s); /* S_013(1, 1): hidden, images freed, out of the list */
+			/* S_013(1, 1): FUN_1000_119A releases the lazy frames resolved (6618 -> callback 1);
+			   not for a sprite kept from an old library: its ids would name resources of the
+			   new one (the original would release those) */
+			for (int k = 0; k < s->lz_n && w->rt && !s->orphan; k++)
+				(void)rt_lazy_frame(w->rt, s->lz_id[k], 1);
+			spr_free(w, s); /* hidden, images freed, out of the list */
 			edited_release(w, 0);
 		}
 		else
@@ -2172,6 +2186,7 @@ int spr_default_detach(SprWorld *w, Sprite *out)
 		f->data = NULL;
 		f->size = 0;
 		f->text_id = 0;
+		f->lazy = 0;
 	}
 	s->orphan = 1;
 	s->pinned = 1; /* S_042 at the start of FUN_1008_C5F8 */
@@ -2195,4 +2210,48 @@ void spr_default_attach(SprWorld *w, const Sprite *s)
 		}
 	Sprite tmp = *s;
 	spr_free(w, &tmp);
+}
+
+void spr_set_lazy(SprWorld *w, unsigned sprite, unsigned member)
+{
+	Sprite *s = find(w, sprite);
+	for (int i = 0; s && i < s->n_frames; i++)
+		if (!s->frames[i].text_id && s->frames[i].entry == member)
+			s->frames[i].lazy = 1;
+}
+
+/* FUN_1000_6674: a lazy frame that becomes current is looked up in the sprite's cache (a hit
+ * moves it to the front, FUN_1000_650E); otherwise the EXE loads it (FUN_1000_6598 -> callback
+ * FUN_1008_7780(0, id)) and it goes to the front, the oldest of 20 being released
+ * (FUN_1000_649C -> 665A -> callback 1). */
+static void resolve_frame(SprWorld *w, Sprite *s, int idx)
+{
+	if (idx < 0 || idx >= s->n_frames || !s->frames[idx].lazy || !w->rt)
+		return;
+	uint16_t id = s->frames[idx].entry;
+	int k = 0;
+	while (k < s->lz_n && s->lz_id[k] != id)
+		k++;
+	if (k == s->lz_n) {
+		if (!rt_lazy_frame(w->rt, id, 0))
+			return;
+		if (s->lz_n == 20)
+			(void)rt_lazy_frame(w->rt, s->lz_id[--s->lz_n], 1);
+		k = s->lz_n++;
+	}
+	memmove(s->lz_id + 1, s->lz_id, (size_t)k * sizeof(s->lz_id[0]));
+	s->lz_id[0] = id;
+}
+
+static void resolve_shown(SprWorld *w, Sprite *s)
+{
+	for (int k = 0; k < s->n_shown; k++)
+		resolve_frame(w, s, s->shown[k]);
+}
+
+void spr_resolve(SprWorld *w, unsigned sprite)
+{
+	Sprite *s = find(w, sprite);
+	if (s)
+		resolve_shown(w, s);
 }

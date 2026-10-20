@@ -46,7 +46,7 @@ The sum of all header bytes (mod 256) is 0 (`Lib_ReadHeader`).
 | 12 | cel: `{bitmap id, dx, dy}` | **decoded** (`SPRITES_ANIMATIONS.md`) |
 | 13 | list of resources to load together | **decoded** |
 | 15 | animation (commands; command 0x15 contains a script instruction) | **decoded** (2230/2230 aligned, `SPRITES_ANIMATIONS.md`) |
-| 17 | sprite: position, frames, members | partial (`SPRITES_ANIMATIONS.md`) |
+| 17 | sprite: position, frames, members | **decoded** (`SPRITES_ANIMATIONS.md`) |
 | 18 | **text**: sprite member just like the frames (20 bytes, `SPRITES_ANIMATIONS.md` "Text") | **decoded** |
 | 16 | **script** (bytecode) | **instruction encoding complete** |
 
