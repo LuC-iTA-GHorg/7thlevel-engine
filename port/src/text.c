@@ -168,11 +168,22 @@ static Font *pick(const char *face)
 	return f->ok ? f : (fonts[0].ok ? &fonts[0] : &fonts[1]);
 }
 
+/* Glyph of a character. Symbol fonts (HYENA.TTF of the Jungle games: cmap 3,0 only) keep their
+   glyphs at 0xF020-0xF0FF; GDI maps character c to 0xF000 + c for them, stb_truetype does not
+   (the scores were drawn as empty boxes). */
+static int glyph(Font *f, int ch)
+{
+	int g = stbtt_FindGlyphIndex(&f->info, ch);
+	if (!g && ch < 0x100)
+		g = stbtt_FindGlyphIndex(&f->info, 0xF000 + ch);
+	return g;
+}
+
 /* Integer advance per character, like GDI character widths (no kerning). */
 static int advance(Font *f, float scale, int ch)
 {
 	int adv, lsb;
-	stbtt_GetCodepointHMetrics(&f->info, ch, &adv, &lsb);
+	stbtt_GetGlyphHMetrics(&f->info, glyph(f, ch), &adv, &lsb);
 	return (int)(adv * scale + 0.5f);
 }
 
@@ -257,13 +268,13 @@ int text_render(const char *face, int height, const char *str, int box_w, int bo
 		int x = flags & TEXT_DT_RIGHT ? W - lw : flags & TEXT_DT_CENTER ? (W - lw) / 2 : 0;
 		int y = k * line_h + base;
 		for (int i = 0; i < ln[k]; i++) {
-			int c = (unsigned char)str[st[k] + i], x0, y0, x1, y1;
-			stbtt_GetCodepointBitmapBox(&f->info, c, scale, scale, &x0, &y0, &x1, &y1);
+			int gi = glyph(f, (unsigned char)str[st[k] + i]), x0, y0, x1, y1;
+			stbtt_GetGlyphBitmapBox(&f->info, gi, scale, scale, &x0, &y0, &x1, &y1);
 			int gw = x1 - x0, gh = y1 - y0;
 			if (gw > 0 && gh > 0) {
 				unsigned char *g = malloc((size_t)gw * gh);
 				if (g) {
-					stbtt_MakeCodepointBitmap(&f->info, g, gw, gh, gw, scale, scale, c);
+					stbtt_MakeGlyphBitmap(&f->info, g, gw, gh, gw, scale, scale, gi);
 					for (int yy = 0; yy < gh; yy++)
 						for (int xx = 0; xx < gw; xx++) {
 							int px = x + x0 + xx, py = y + y0 + yy;
@@ -273,7 +284,7 @@ int text_render(const char *face, int height, const char *str, int box_w, int bo
 					free(g);
 				}
 			}
-			x += advance(f, scale, c);
+			x += advance(f, scale, (unsigned char)str[st[k] + i]);
 		}
 	}
 	*pix = out;
