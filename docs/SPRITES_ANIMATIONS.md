@@ -387,7 +387,7 @@ box) + 1, and uses it as a frame; anchor (1010:189E): for left alignment `x + (w
 center `x`, for right `x - w/2` (the same vertically). Empty text = `" "` (DS:01F2).
 Opcode 29 rewrites the text (`wsprintf`) and redraws. 43 resources in the game (scores,
 stopwatch, player labels). In the port: `text.c` (stb_truetype; Windows fonts or Liberation in
-`tools\fonts`), frames with `text_id` in `sprite.c`.
+`tools\fonts`), frames with `text_id` in `sprite.c`. Symbol fonts (`HYENA.TTF` of the Jungle games: only a symbol cmap, glyphs at 0xF020-0xF0FF): like GDI, a character with no glyph of its own is looked up as 0xF000 + c (before 2026-10-25 the scores of the five Jungle games were empty boxes).
 
 ## Opcode 18 and the animation of the old sprite
 
