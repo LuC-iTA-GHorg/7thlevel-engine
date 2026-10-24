@@ -24,6 +24,7 @@
 #define RT_GSHARED    5001   /* first global shared by all libraries */
 #define RT_LSTACK     4096   /* words for the local-variable frames */
 #define RT_MAX_DEPTH  30     /* same as the original (error 0x6A) */
+#define RT_MAX_HITS   4642   /* opcode 21 pairs: 0xFDE9 / 14 bytes, like the original */
 
 typedef struct Rt Rt;
 typedef void (*RtScript)(Rt *rt, int16_t *l);
@@ -132,12 +133,14 @@ struct Rt {
 	int timers_paused;         /* builtin 6D (DAT_5B87): timers do not fire */
 	uint32_t timers_paused_at;
 	/* opcode 21: sprite pairs to check for collisions on every tick (DS:5707,
-	   14-byte records, FUN_1008_3E62 / 4124) */
+	   14-byte records, FUN_1008_3E62 / 4124); the original array grows by 10 records
+	   (FUN_1008_0822) up to 0xFDE9 bytes = 4642 pairs (Chiseler: bricks x pigeons need
+	   more than 64) */
 	struct {
 		uint16_t a, b;             /* sprite (a < b) */
 		uint16_t script, arg1, arg2; /* operands encoded as constants */
 		uint8_t repeat, hide_a, hide_b;
-	} hits[64];
+	} hits[RT_MAX_HITS];
 	int n_hits;
 	uint16_t last_rand2e;      /* DAT_0CFA: last offset of opcode 2E */
 	/* ---- sound events (opcode 08/0F wave, 50/51/5C MIDI; TOPSYA01, docs\AUDIO.md). When a sound

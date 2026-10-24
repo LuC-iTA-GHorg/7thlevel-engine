@@ -3205,7 +3205,7 @@ static int op_hit(Rt *rt, int16_t *l, const uint8_t *b)
 		return 1;
 	}
 	if (i == rt->n_hits) {
-		if (rt->n_hits >= 64) {
+		if (rt->n_hits >= RT_MAX_HITS) {
 			tr(rt, "!! too many collision pairs\n");
 			return 1;
 		}

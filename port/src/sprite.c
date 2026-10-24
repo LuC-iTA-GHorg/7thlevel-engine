@@ -1551,8 +1551,10 @@ int spr_replace(SprWorld *w, unsigned old_id, unsigned new_id)
 	}
 	else
 		o->visible = 0; /* S_025 */
-	/* S_044(0, 1, new, old): swap in the draw list only if the new one is above */
-	if (cmp_layer(&n, &o) > 0) {
+	/* S_044(0, 1, new, old): swap in the draw list only if both have the same layer (+0x3C)
+	   and the new one is above (Chiseler: Hugo's head 3190, layer 200, replaces 3155, layer 50,
+	   and must stay above his body 3226, layer 100) */
+	if (n->layer == o->layer && cmp_layer(&n, &o) > 0) {
 		int l = n->layer, q = n->seq;
 		n->layer = o->layer;
 		n->seq = o->seq;
