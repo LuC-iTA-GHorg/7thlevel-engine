@@ -273,7 +273,15 @@ On-screen comparison between the original game running under OTVDM and the port.
   queue intact** (e.g. 0C → FUN_1000_383C, 08 → S_025, 12 → S_043, 0B nothing). Fixed bug:
   the port used to empty the queue for these too, and the position `5A 0C` after the
   `show` of the Upsy characters cancelled cmd 02, which composes body, head (G(1250)) and
-  balloons (G(1254)). Arguments: cmd 1 <- (from, to, duration), cmd 2 <- (frames..., duration),
+  balloons (G(1254)). For the six replacing commands the new command becomes the current
+  one at once (FUN_1000_6044: +0x38 = command, then 4AC2) and FUN_1000_54F6 also clears the
+  loop exit (+0x65): a **movement in progress (09/05/0A) ends there**, since its state lives in
+  the old command record, and a 5A 09 starts from the current position (FUN_1000_58E8). Fixed
+  bug: the port kept the old movement running, which then skipped the new command when it
+  reached its goal; in Bug Drop the sideways moves of a falling pair (`5A 0C` relative + `5A 09`
+  to the new column, scripts 1033/1061 and the player's moves) were lost, so Timon's pairs all
+  fell into the same column, drawn on top of each other while the grid recorded other
+  columns, and the player's keys seemed to stop working. Arguments: cmd 1 <- (from, to, duration), cmd 2 <- (frames..., duration),
   cmd 12 <- (frame).
 
 ## Engine pace and events (verified against the original)

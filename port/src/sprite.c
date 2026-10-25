@@ -759,10 +759,19 @@ int spr_command(SprWorld *w, int immediate, unsigned argc, const int16_t *a)
 	if (!buf)
 		return 0;
 	if (immediate) {
+		/* FUN_1000_54F6 empties the buffer and clears the loop exit (+0x65); the new command
+		   then becomes the current one (FUN_1000_6044: +0x38 = command, 4AC2). The state of a
+		   movement in progress lives in the old 09/05/0A record, so it ends here too: without
+		   this the old movement went on to its goal and then skipped the new command (Bug Drop,
+		   Timon's pieces never moved sideways, 5A 0C + 5A 09 of script 1033, and all landed
+		   in the same column on top of each other) */
 		free(s->anim);
 		s->step_left = 0;
 		s->waiting = 0;
 		s->after_pos = 0;
+		s->moving = 0;
+		s->mv_op = 0;
+		s->break_loops = 0;
 		s->pc = 0;
 	}
 	for (unsigned i = 0; i < n; i++) {
