@@ -110,6 +110,7 @@ Command-line options take precedence. The game keeps its own settings and high s
 | `--viewer` | archive viewer (bitmaps, waves, MIDI) |
 | `--trace FILE` | trace of the game logic (scripts, events, input), with timestamps |
 | `--input FILE` | play timed input events (tests): `MS key VK`, `MS keydown VK`, `MS keyup VK`, `MS click X Y`, `MS move X Y`, `MS char C`, `MS text WORD`, `MS waitpix X Y RRGGBB [TOL] [MAX]`, `MS shot FILE.bmp`, `MS quit`, ... |
+| `--then-play` | with `--input`: once the file is over (no `quit`) the real keyboard and mouse work again, to go on playing by hand from a forced state (e.g. a bonus) |
 | `--seed N`, `--fixed-step [MS]`, `--fast` | repeatable runs: fixed random seed, simulated clock, no waiting |
 | `--ini FILE` | `7THLEVEL.INI` to use |
 | `--coverage FILE` | which scripts, sprites and animations were executed |

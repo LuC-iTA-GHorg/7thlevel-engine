@@ -440,7 +440,8 @@ static int game_event(Rt *rt, Video *v, const SDL_Event *ev)
  *                                           by the wait, as in tools\scripts\orig_play.ps1)
  *   MS script ID | global N V              (tests only: runs script ID / sets G(N) = V)
  *   MS shot FILE.bmp | quit
- * MS = milliseconds since the game started. Returns 0 after "quit". */
+ * MS = milliseconds since the game started. Returns 0 after "quit", 2 at the end of the file. */
+static int input_then_play; /* --then-play: after the end of the file the real keyboard and mouse count */
 static int play_input(FILE *in, uint32_t elapsed, Rt *rt, Video *v)
 {
 	static char line[512];
@@ -458,7 +459,7 @@ static int play_input(FILE *in, uint32_t elapsed, Rt *rt, Video *v)
 	for (;;) {
 		if (!pending) {
 			if (!fgets(line, sizeof(line), in))
-				return 1;
+				return up_btn ? 1 : 2; /* the end once the last click is released */
 			pending = 1;
 		}
 		char cmd[32] = "", arg[400] = "";
@@ -706,13 +707,15 @@ static int game_window(const char *datadir, const char *lib, int w, int h, int s
 	clk_real0 = SDL_GetTicks();
 	uint32_t start = clk_now();
 	eng_last = start;
+	int input_live = 0; /* --then-play and the event file is over */
 	for (int running = 1; running && !rt.quit;) {
 		SDL_Event ev;
 		uint32_t now = clk_now();
 		rt.now_ms = now;
 		while (running && !rt.quit && SDL_PollEvent(&ev))
-			/* with --input only the file counts: the real mouse over the window would alter the test */
-			if (!input || ev.type == SDL_QUIT)
+			/* with --input only the file counts: the real mouse over the window would alter the test
+			   (with --then-play only until the file ends) */
+			if (!input || input_live || ev.type == SDL_QUIT)
 				running = game_event(&rt, v, &ev);
 		if (rt.warp_mouse) { /* opcode 49 */
 			rt.warp_mouse = 0;
@@ -747,8 +750,13 @@ static int game_window(const char *datadir, const char *lib, int w, int h, int s
 		game_sync_library(&rt);
 		video_clear(v, 0);
 		spr_draw(wp, v);
-		if (input && !play_input(input, now - start, &rt, v))
-			running = 0;
+		if (input && !input_live) {
+			int r = play_input(input, now - start, &rt, v);
+			if (!r)
+				running = 0;
+			else if (r == 2 && input_then_play)
+				input_live = 1;
+		}
 		video_set_fade(v, rt.fade_level);
 		video_present(v);
 		if (clk_step)
@@ -887,6 +895,8 @@ int main(int argc, char **argv)
 			run_seconds = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--trace") && i + 1 < argc)
 			tracefile = argv[++i];
+		else if (!strcmp(argv[i], "--then-play")) /* with --input: play by hand once the file is over */
+			input_then_play = 1;
 		else if (!strcmp(argv[i], "--input") && i + 1 < argc)
 			inputfile = argv[++i];
 		else if (!strcmp(argv[i], "--seed") && i + 1 < argc)
