@@ -53,6 +53,8 @@ typedef struct {
 	int lz_n;
 	SprFrame *frames;       /* malloc, one slot per member of the type 17 resource */
 	int n_frames;
+	int n_own;              /* frames of the resource; those after it were appended by opcode 18
+	                           (FUN_1008_E4F4, dropped again by E67E at the next replace) */
 	int shown[SPR_MAX_LAYERS]; /* frames currently shown (indices), -1 = none */
 	int n_shown;
 	/* animation */
@@ -203,9 +205,13 @@ void spr_set_text(SprWorld *w, unsigned id, const char *s);                   /*
  * use it are redone. */
 void spr_set_text_color(SprWorld *w, unsigned id, uint8_t color);
 /* Opcode 18 (TOPSY FUN_1008_E06C): the new sprite takes the old one's place in the drawing
- * order; if it has no frames it inherits the old one's images, position and mirroring, otherwise
- * the old one is hidden. Unloading the old one is up to the caller. 0 = error. */
-int spr_replace(SprWorld *w, unsigned old_id, unsigned new_id); /* 2 = images inherited */
+ * order; if it is not visible (or was not loaded) it inherits the old one's shown images,
+ * position, mirroring and visibility (E4F4 + S_045), otherwise the old one is hidden. The images
+ * appended by an earlier inheritance are dropped first (FUN_1008_E67E): their ids go to
+ * released[] (at most max, count in *n_released) and each one loses a holder (E47A, caller).
+ * Unloading the old one is up to the caller. 0 = error. */
+int spr_replace(SprWorld *w, unsigned old_id, unsigned new_id, uint16_t *released, int max,
+	int *n_released); /* 2 = images inherited */
 /* Builtin 7D (FUN_1008_708A -> S_019 = TOPSYS01 1000:2890): draws bitmap src (type 1, or a text
  * of type 18) into bitmap dest (type 1); both rectangles are centred on their anchors, src is
  * shifted by (dx, dy) and clipped to dest; index 0 of src is transparent. 1 = something drawn. */

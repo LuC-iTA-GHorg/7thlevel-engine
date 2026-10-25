@@ -525,6 +525,7 @@ int spr_load(SprWorld *w, unsigned id)
 	   state 1 (clickable even if invisible, e.g. the menu buttons of TOPSMAIN) */
 	s->n_shown = s->n_frames ? 1 : 0;
 	s->shown[0] = 0;
+	s->n_own = s->n_frames;
 	return 1;
 }
 
@@ -1517,8 +1518,10 @@ void spr_set_layer(SprWorld *w, unsigned id, int layer)
 	}
 }
 
-int spr_replace(SprWorld *w, unsigned old_id, unsigned new_id)
+int spr_replace(SprWorld *w, unsigned old_id, unsigned new_id, uint16_t *released, int max,
+	int *n_released)
 {
+	*n_released = 0;
 	Sprite *o = find(w, old_id);
 	if (!o || !spr_load(w, new_id))
 		return 0;
@@ -1527,20 +1530,58 @@ int spr_replace(SprWorld *w, unsigned old_id, unsigned new_id)
 	if (o != n)
 		stop_anim(w, o); /* S_010: the old one's animation (and queued commands) stops */
 	int inherited = 0;
-	if (!n->n_frames && o->n_frames) { /* FUN_1008_E4F4 + S_045: inherits the images */
-		SprFrame *f = calloc((size_t)o->n_frames, sizeof(SprFrame));
-		if (!f)
-			return 0;
-		for (int i = 0; i < o->n_frames; i++) {
-			f[i] = o->frames[i];
-			f[i].pix = NULL; /* decoded again: the cache stays with the old one */
-			f[i].lazy = 0;   /* S_002: direct pointers, not {id, 0} records */
+	/* FUN_1008_E06C: the new one takes over the old one (FUN_1008_E4F4 + S_045) when it was not
+	   loaded yet or is not visible (S_023 of the new one, +0x2E = byte +0x56 of the DLL record);
+	   only a sprite already on screen keeps its own state. Slingshooter: the berry splat 2856
+	   (own frames, loaded at the start, never shown) replaces the berry 2855 at the hit and
+	   must appear where the berry is, not at the origin (the centre of the screen). */
+	if (!n->visible) {
+		if (!n->n_own && o->n_frames) { /* no images of its own: the old one's, same indices */
+			SprFrame *f = calloc((size_t)o->n_frames, sizeof(SprFrame));
+			if (!f)
+				return 0;
+			for (int i = 0; i < o->n_frames; i++) {
+				f[i] = o->frames[i];
+				f[i].pix = NULL; /* decoded again: the cache stays with the old one */
+				f[i].lazy = 0;   /* S_002: direct pointers, not {id, 0} records */
+			}
+			for (int i = 0; i < n->n_frames; i++) /* images inherited by an earlier replace */
+				free(n->frames[i].pix);
+			free(n->frames);
+			n->frames = f;
+			n->n_frames = o->n_frames;
+			memcpy(n->shown, o->shown, sizeof(n->shown));
+			n->n_shown = o->n_shown;
 		}
-		free(n->frames);
-		n->frames = f;
-		n->n_frames = o->n_frames;
-		memcpy(n->shown, o->shown, sizeof(n->shown));
-		n->n_shown = o->n_shown;
+		else { /* E4F4: the images shown by the old one are appended to the member list and
+			S_045 makes them the current ones until the new animation shows its own */
+			if (n->n_own) /* E67E: the member count goes back to the resource's (+6 = +4) */
+				for (; n->n_frames > n->n_own; n->n_frames--) {
+					SprFrame *x = &n->frames[n->n_frames - 1];
+					if (*n_released < max)
+						released[(*n_released)++] = x->text_id ? x->text_id : x->entry;
+					free(x->pix);
+					x->pix = NULL;
+				}
+			int ns = 0;
+			for (int k = 0; k < o->n_shown; k++)
+				ns += o->shown[k] >= 0 && o->shown[k] < o->n_frames;
+			SprFrame *f = realloc(n->frames, (size_t)(n->n_frames + ns + 1) * sizeof(SprFrame));
+			if (!f)
+				return 0;
+			n->frames = f;
+			int m = 0;
+			for (int k = 0; k < o->n_shown; k++) {
+				int i = o->shown[k];
+				if (i < 0 || i >= o->n_frames)
+					continue;
+				f[n->n_frames] = o->frames[i];
+				f[n->n_frames].pix = NULL;
+				f[n->n_frames].lazy = 0;
+				n->shown[m++] = n->n_frames++;
+			}
+			n->n_shown = m;
+		}
 		n->x = o->x;
 		n->y = o->y;
 		n->flip_x = o->flip_x;

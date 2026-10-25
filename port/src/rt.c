@@ -3143,7 +3143,11 @@ static int op_replace(Rt *rt, int16_t *l, const uint8_t *b)
 		(void)obj_of(rt, new_id);
 		uint16_t shown[SPR_MAX_LAYERS];
 		int ns = spr_frame_ids(sw, old_id, shown, SPR_MAX_LAYERS);
-		int r = spr_replace(sw, old_id, new_id);
+		uint16_t dropped[SPR_MAX_LAYERS];
+		int nd = 0;
+		int r = spr_replace(sw, old_id, new_id, dropped, SPR_MAX_LAYERS, &nd);
+		for (int k = 0; k < nd; k++) /* FUN_1008_E67E -> E47A: one holder less, unloaded at 0 */
+			(void)rt_lazy_frame(rt, dropped[k], 1);
 		if (!r)
 			return 0;
 		for (int k = 0; r == 2 && k < ns; k++) { /* FUN_1008_E4F4: the images shown, +4 each */

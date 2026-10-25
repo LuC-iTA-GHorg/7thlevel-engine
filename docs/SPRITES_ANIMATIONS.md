@@ -83,9 +83,17 @@ lifetime of a changed bitmap; what is drawn is the same.
   unloaded at 0). The default sprite destroyed by FUN_1008_7372 (S_013(1, …) → FUN_1000_119A
   → 6618) releases its cache entries through the callback; the port skips this for a sprite
   kept from an old library, whose ids would name resources of the new library.
-- **Replace inheriting images** (FUN_1008_E4F4, opcode 18 when the new sprite has no frames):
-  every image shown by the old sprite (S_023) gets one more holder and is added as a direct
-  pointer (S_002), never as `{id, 0}`. This holds with or without the flag.
+- **Replace inheriting images** (FUN_1008_E4F4, opcode 18 when the new sprite was not loaded or
+  is **not visible**, byte +0x56 read through S_023 in FUN_1008_E06C; having frames of its own
+  does not matter): every image shown by the old sprite (S_023) gets one more holder and is
+  appended to the new one's member list as a direct pointer (S_002), never as `{id, 0}`; S_045
+  then moves the current images, the position, the bounding rectangle and the visibility from the
+  old sprite to the new one. The images appended by an earlier replace are dropped first
+  (FUN_1008_E67E: count +6 back to +4, each one loses a holder through E47A). This holds with or
+  without the flag. The port used to inherit only when the new sprite had no frames: in
+  Slingshooter the berry splat (2856, own frames, loaded at the start and never shown) replaces
+  the berry at the hit and appeared at the origin, the centre of the screen, instead of on the
+  target.
 
 ### Default sprite (byte +0x14)
 
