@@ -93,7 +93,8 @@ filter, volumes, game folder) and starts the game. `<game>.exe` can also be star
 ### `<game>.ini`
 
 Next to the executable (or in the current folder): `Resolution` (800 or 640), `Scale` (0 =
-largest that fits), `Fullscreen`, `Filter` (`nearest`/`linear`), `IntegerScale`, `Vsync`,
+largest that fits), `Fullscreen`, `Filter` (`nearest`/`linear`), `IntegerScale`, `Aspect`
+(`keep` = original 4:3 with black bars, `stretch` = fills the window), `Vsync`,
 `Volume`, `MusicVolume`, `Trace`, `DataDir` (folder of the `.BIN` files), `SoundFont`, `Library`.
 Command-line options take precedence. The game keeps its own settings and high scores in
 `7THLEVEL.INI`, as the original did.

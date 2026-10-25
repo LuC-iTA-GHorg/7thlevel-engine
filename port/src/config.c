@@ -45,6 +45,8 @@ static void apply(Config *c, const char *key, const char *v)
 		c->linear = !strcasecmp(v, "linear") || !strcasecmp(v, "smooth");
 	else if (!strcasecmp(key, "IntegerScale"))
 		c->integer_scale = to_bool(v);
+	else if (!strcasecmp(key, "Aspect"))
+		c->stretch = !strcasecmp(v, "stretch");
 	else if (!strcasecmp(key, "Vsync"))
 		c->vsync = to_bool(v);
 	else if (!strcasecmp(key, "Volume"))

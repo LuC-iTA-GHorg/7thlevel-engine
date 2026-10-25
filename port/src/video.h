@@ -13,8 +13,9 @@
 typedef struct Video Video;
 
 /* Presentation options, to call before video_create: linear = smooth scaling
- * (otherwise sharp pixels), integer_scale = integer multiples only with black bars, vsync. */
-void video_set_options(int linear, int integer_scale, int vsync);
+ * (otherwise sharp pixels), integer_scale = integer multiples only with black bars, stretch =
+ * the picture fills the window ignoring the aspect ratio (integer_scale is then ignored), vsync. */
+void video_set_options(int linear, int integer_scale, int stretch, int vsync);
 
 /* Creates the window with logical resolution w x h (640x480 or 800x600), window = scale times that. */
 Video *video_create(const char *title, int w, int h, int scale);
@@ -44,6 +45,9 @@ void video_set_offset(Video *v, int dx, int dy);
 void video_set_fade(Video *v, int level);
 /* Moves the cursor to point (x, y) of the logical screen (the original's SetCursorPos). */
 void video_warp_mouse(Video *v, int x, int y);
+/* Window coordinates of a mouse event -> game screen coordinates (only stretch changes them:
+   otherwise SDL's logical size already did it). */
+void video_mouse_to_game(const Video *v, int *x, int *y);
 /* Saves the last framebuffer (8 bit + palette) as a BMP: automated checks. */
 int video_save_bmp(Video *v, const char *path);
 /* 0xRRGGBB color of pixel x,y as on screen (fade included); -1 outside the screen */

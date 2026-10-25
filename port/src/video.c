@@ -21,12 +21,13 @@ struct Video {
 	int cursor_mode;
 };
 
-static int opt_linear, opt_integer = 1, opt_vsync = 1;
+static int opt_linear, opt_integer = 1, opt_stretch, opt_vsync = 1;
 
-void video_set_options(int linear, int integer_scale, int vsync)
+void video_set_options(int linear, int integer_scale, int stretch, int vsync)
 {
 	opt_linear = linear;
-	opt_integer = integer_scale;
+	opt_integer = integer_scale && !stretch;
+	opt_stretch = stretch;
 	opt_vsync = vsync;
 }
 
@@ -59,8 +60,12 @@ Video *video_create(const char *title, int w, int h, int scale)
 		goto fail;
 	/* pixel art: normally integer scale with black bars and no filter (<game>.ini changes it) */
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, opt_linear ? "linear" : "nearest");
-	SDL_RenderSetLogicalSize(v->ren, w, h);
-	SDL_RenderSetIntegerScale(v->ren, opt_integer ? SDL_TRUE : SDL_FALSE);
+	/* stretch: no logical size, video_present draws over the whole output and
+	   video_mouse_to_game / video_warp_mouse convert the coordinates */
+	if (!opt_stretch) {
+		SDL_RenderSetLogicalSize(v->ren, w, h);
+		SDL_RenderSetIntegerScale(v->ren, opt_integer ? SDL_TRUE : SDL_FALSE);
+	}
 	v->tex = SDL_CreateTexture(v->ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
 	if (!v->tex)
 		goto fail;
@@ -191,6 +196,9 @@ void video_present(Video *v)
 	SDL_SetRenderDrawColor(v->ren, 0, 0, 0, 255);
 	SDL_RenderClear(v->ren);
 	SDL_Rect dst = { v->ox, v->oy, v->w, v->h };
+	int ow, oh;
+	if (opt_stretch && SDL_GetRendererOutputSize(v->ren, &ow, &oh) == 0)
+		dst = (SDL_Rect){ v->ox * ow / v->w, v->oy * oh / v->h, ow, oh };
 	SDL_RenderCopy(v->ren, v->tex, NULL, &dst);
 	SDL_RenderPresent(v->ren);
 }
@@ -204,8 +212,26 @@ void video_set_offset(Video *v, int dx, int dy)
 void video_warp_mouse(Video *v, int x, int y)
 {
 	int wx, wy;
-	SDL_RenderLogicalToWindow(v->ren, (float)x, (float)y, &wx, &wy);
+	if (opt_stretch) {
+		SDL_GetWindowSize(v->win, &wx, &wy);
+		wx = x * wx / v->w;
+		wy = y * wy / v->h;
+	}
+	else
+		SDL_RenderLogicalToWindow(v->ren, (float)x, (float)y, &wx, &wy);
 	SDL_WarpMouseInWindow(v->win, wx, wy);
+}
+
+void video_mouse_to_game(const Video *v, int *x, int *y)
+{
+	int ww, wh;
+	if (!opt_stretch)
+		return;
+	SDL_GetWindowSize(v->win, &ww, &wh);
+	if (ww > 0 && wh > 0) {
+		*x = *x * v->w / ww;
+		*y = *y * v->h / wh;
+	}
 }
 
 int video_save_bmp(Video *v, const char *path)

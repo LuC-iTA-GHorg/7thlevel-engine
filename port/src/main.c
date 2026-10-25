@@ -407,9 +407,12 @@ static int game_event(Rt *rt, Video *v, const SDL_Event *ev)
 			rt_key_up(rt, vk);
 		break;
 	}
-	case SDL_MOUSEMOTION: /* coordinates already in the logical screen (SDL_RenderSetLogicalSize) */
-		rt_mouse_move(rt, ev->motion.x - cx, ev->motion.y - cy);
+	case SDL_MOUSEMOTION: { /* coordinates already in the logical screen (SDL_RenderSetLogicalSize) */
+		int x = ev->motion.x, y = ev->motion.y;
+		video_mouse_to_game(v, &x, &y);
+		rt_mouse_move(rt, x - cx, y - cy);
 		break;
+	}
 	case SDL_MOUSEBUTTONDOWN:
 	case SDL_MOUSEBUTTONUP: {
 		int b = ev->button.button == SDL_BUTTON_LEFT ? 1 : ev->button.button == SDL_BUTTON_RIGHT ? 2 : 0;
@@ -417,7 +420,9 @@ static int game_event(Rt *rt, Video *v, const SDL_Event *ev)
 			break;
 		int down = ev->type == SDL_MOUSEBUTTONDOWN;
 		SDL_CaptureMouse(down ? SDL_TRUE : SDL_FALSE); /* SetCapture / ReleaseCapture */
-		rt_mouse_button(rt, ev->button.x - cx, ev->button.y - cy, b, down);
+		int x = ev->button.x, y = ev->button.y;
+		video_mouse_to_game(v, &x, &y);
+		rt_mouse_button(rt, x - cx, y - cy, b, down);
 		break;
 	}
 	}
@@ -935,7 +940,7 @@ int main(int argc, char **argv)
 	}
 	if (clk_step)
 		g_cfg.vsync = 0; /* the pace comes from the simulated clock, not the screen */
-	video_set_options(g_cfg.linear, g_cfg.integer_scale, g_cfg.vsync);
+	video_set_options(g_cfg.linear, g_cfg.integer_scale, g_cfg.stretch, g_cfg.vsync);
 
 	if (run_seconds >= 0)
 		return run_game(datadir, run_seconds, tracefile);

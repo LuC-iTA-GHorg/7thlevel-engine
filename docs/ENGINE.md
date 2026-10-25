@@ -65,4 +65,5 @@ can use a fixed seed (`--seed N`) for repeatable runs.
 
 The picture is drawn at the original resolution (800×600 or 640×480) and scaled to the window
 with SDL's logical size: any window size and full screen (Alt+Enter) keep the aspect ratio with
-black bars.
+black bars. With `Aspect=stretch` the picture fills the whole window instead (e.g. 4:3 stretched
+to a 16:9 screen) and the mouse coordinates are scaled by hand (`video_mouse_to_game`).

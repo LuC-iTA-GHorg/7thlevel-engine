@@ -12,6 +12,7 @@ typedef struct {
 	int fullscreen;      /* Fullscreen = 0/1 */
 	int linear;          /* Filter = nearest (0, sharp pixels) or linear (1, smooth scaling) */
 	int integer_scale;   /* IntegerScale = 1: integer multiples only, black bars; 0 = fills the window */
+	int stretch;         /* Aspect = keep (0, original 4:3 with black bars) or stretch (1, fills the window) */
 	int vsync;           /* Vsync = 0/1 */
 	int volume;          /* Volume = 0..100 (master) */
 	int music;           /* MusicVolume = 0..100 */

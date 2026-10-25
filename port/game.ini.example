@@ -11,6 +11,8 @@ Fullscreen=0
 Filter=nearest
 ; IntegerScale: 1 = integer multiples only (black bars), 0 = fill the window
 IntegerScale=0
+; Aspect: keep (original 4:3, black bars) or stretch (fills the window, e.g. a 16:9 screen; distorts)
+Aspect=keep
 Vsync=1
 ; Volumes 0..100
 Volume=100

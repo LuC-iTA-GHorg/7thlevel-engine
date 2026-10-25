@@ -19,12 +19,12 @@
 #include <wchar.h>
 
 enum {
-	ID_DATA = 100, ID_DATA_BROWSE, ID_RES, ID_SCALE, ID_FULL, ID_FILTER, ID_INTEGER, ID_VSYNC,
+	ID_DATA = 100, ID_DATA_BROWSE, ID_RES, ID_SCALE, ID_FULL, ID_FILTER, ID_INTEGER, ID_ASPECT, ID_VSYNC,
 	ID_VOL, ID_MUSIC, ID_SF2, ID_SF2_BROWSE, ID_TRACE, ID_STATUS, ID_PLAY, ID_SAVE, ID_CLOSE,
 	ID_VOLTXT, ID_MUSTXT
 };
 
-static HWND hwnd, c_data, c_res, c_scale, c_full, c_filter, c_integer, c_vsync, c_vol, c_music, c_sf2, c_trace, c_status;
+static HWND hwnd, c_data, c_res, c_scale, c_full, c_filter, c_integer, c_aspect, c_vsync, c_vol, c_music, c_sf2, c_trace, c_status;
 static wchar_t dir[MAX_PATH];     /* launcher folder */
 static wchar_t ini[MAX_PATH];     /* <game>.ini */
 
@@ -139,6 +139,8 @@ static void load_settings(void)
 	ini_get("Filter", "nearest", v, sizeof(v));
 	SendMessageW(c_filter, CB_SETCURSEL, !_stricmp(v, "linear") ? 1 : 0, 0);
 	SendMessageW(c_integer, BM_SETCHECK, ini_int("IntegerScale", 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+	ini_get("Aspect", "keep", v, sizeof(v));
+	SendMessageW(c_aspect, CB_SETCURSEL, !_stricmp(v, "stretch") ? 1 : 0, 0);
 	SendMessageW(c_vsync, BM_SETCHECK, ini_int("Vsync", 1) ? BST_CHECKED : BST_UNCHECKED, 0);
 	SendMessageW(c_vol, TBM_SETPOS, TRUE, ini_int("Volume", 100));
 	SendMessageW(c_music, TBM_SETPOS, TRUE, ini_int("MusicVolume", 100));
@@ -173,6 +175,8 @@ static int save_settings(void)
 	fprintf(f, "Filter=%s\n", SendMessageW(c_filter, CB_GETCURSEL, 0, 0) == 1 ? "linear" : "nearest");
 	fprintf(f, "; IntegerScale: 1 = integer multiples only (black bars), 0 = fills the window\n");
 	fprintf(f, "IntegerScale=%d\n", checked(c_integer));
+	fprintf(f, "; Aspect: keep (original 4:3, black bars) or stretch (fills the window, distorts)\n");
+	fprintf(f, "Aspect=%s\n", SendMessageW(c_aspect, CB_GETCURSEL, 0, 0) == 1 ? "stretch" : "keep");
 	fprintf(f, "Vsync=%d\n", checked(c_vsync));
 	fprintf(f, "Volume=%d\n", (int)SendMessageW(c_vol, TBM_GETPOS, 0, 0));
 	fprintf(f, "MusicVolume=%d\n", (int)SendMessageW(c_music, TBM_GETPOS, 0, 0));
@@ -278,7 +282,10 @@ static void create_controls(void)
 	add(c_filter, L"Sharp (pixels)"); add(c_filter, L"Smooth");
 	c_integer = make(L"BUTTON", L"Integer multiples only (black bars)", BS_AUTOCHECKBOX, 350, y, 260, 22, ID_INTEGER);
 	y += 30;
-	c_vsync = make(L"BUTTON", L"Sync with the monitor (vsync)", BS_AUTOCHECKBOX, 170, y, 300, 22, ID_VSYNC);
+	label(L"Aspect ratio:", 12, y, 150);
+	c_aspect = make(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL, 170, y, 160, 120, ID_ASPECT);
+	add(c_aspect, L"Original 4:3"); add(c_aspect, L"Stretch to fill");
+	c_vsync = make(L"BUTTON", L"Sync with the monitor (vsync)", BS_AUTOCHECKBOX, 350, y, 260, 22, ID_VSYNC);
 	y += 32;
 	label(L"Master volume:", 12, y, 150);
 	c_vol = make(L"msctls_trackbar32", L"", TBS_AUTOTICKS, 170, y - 4, 350, 30, ID_VOL);
